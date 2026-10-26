@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Secrets and local config: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Generated artifacts
+traces/
+evals/results/*.json
+!evals/results/.gitkeep
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
