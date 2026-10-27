@@ -1,0 +1,1 @@
+"""Birr cash assistant."""
