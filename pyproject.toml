@@ -1,7 +1,7 @@
 [project]
-name = "auditor"
+name = "birr"
 version = "0.1.0"
-description = "AI Application Auditor: an on-call SRE agent built on Meta's Muse Spark Open"
+description = "Voice-first birr cash assistant for blind users, built on SAM 3.1 and Muse Spark Open"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -18,7 +18,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["auditor"]
+packages = ["birr"]
 
 [tool.ruff]
 line-length = 100

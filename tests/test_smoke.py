@@ -1,5 +1,5 @@
-import auditor
+import birr
 
 
 def test_package_imports():
-    assert auditor.__doc__
+    assert birr.__doc__
