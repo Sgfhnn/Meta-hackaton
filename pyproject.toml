@@ -35,3 +35,6 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"birr/read/muse.py" = ["E501"]  # the knowledge-pack prompt lines
