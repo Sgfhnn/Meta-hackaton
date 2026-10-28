@@ -40,10 +40,10 @@ class Settings:
     max_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     )
-    scan_timeout_s: float = field(default_factory=lambda: float(os.getenv("SCAN_TIMEOUT_S", "15")))
+    scan_timeout_s: float = field(default_factory=lambda: float(os.getenv("SCAN_TIMEOUT_S", "20")))
     sam_timeout_s: float = field(default_factory=lambda: float(os.getenv("SAM_TIMEOUT_S", "8")))
     # Pending team decision: when SAM is down, may a Muse-only read produce a total?
-    muse_only_totals: bool = field(default_factory=lambda: _flag("MUSE_ONLY_TOTALS", True))
+    muse_only_totals: bool = field(default_factory=lambda: _flag("MUSE_ONLY_TOTALS", False))
     trace_dir: str = field(default_factory=lambda: os.getenv("TRACE_DIR", "traces"))
 
 

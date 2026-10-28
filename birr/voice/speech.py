@@ -43,10 +43,10 @@ def change_text(chg: dict) -> str:
 
 def guide_text(position: str, action: str, reason: str) -> str:
     where = f"at the {position}"
-    if action == "slide_out" and reason == "covered":
+    if action == "lay_flat" and reason == "merged":
+        text = "Spread the notes apart so none touch or overlap"
+    elif action == "slide_out" and reason == "covered":
         text = f"One note is covered, {where}. Slide it out so I can see all of it"
-    elif action == "slide_out" and reason == "merged":
-        text = f"Some notes are stacked {where}. Spread them apart"
     elif action == "slide_out":
         text = f"The note {where} is hard to see. Slide it away from the others"
     elif action == "lay_flat":

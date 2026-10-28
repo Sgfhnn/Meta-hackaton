@@ -50,7 +50,8 @@ def test_guide_when_sam_sees_a_covered_note(client, fake):
     hint = body["hint"]
     assert hint["action"] == "slide_out"
     assert hint["position"] == "near left"
-    assert body["notes"][hint["note_index"]]["status"] == "partial"
+    assert hint["note_index"] is None
+    assert len(body["notes"]) == 2
     assert "covered" in body["speech"]["en"]
 
 
@@ -77,15 +78,6 @@ def test_give_up_speech_on_last_attempt(client, fake):
     assert "cannot count" in body["speech"]["en"]
 
 
-def test_sam_down_muse_only_total(client, fake):
-    fake["labels"] = ["200", "200"]
-    fake["regions"] = SamError("down")
-    body = post_scan(client).json()
-    assert body["outcome"] == "total"
-    assert body["total"] == 400
-    assert body["timing_ms"]["sam"] is None
-
-
 def test_sam_down_never_guides(client, fake):
     fake["labels"] = ["200", "unclear"]
     fake["regions"] = SamError("down")
@@ -99,6 +91,23 @@ def test_sam_down_flag_off_rescans(client, fake, monkeypatch):
     fake["labels"] = ["200"]
     fake["regions"] = SamError("down")
     assert post_scan(client).json()["outcome"] == "rescan"
+
+
+def test_sam_down_flag_on_allows_muse_total(client, fake, monkeypatch):
+    monkeypatch.setenv("MUSE_ONLY_TOTALS", "true")
+    fake["labels"] = ["200"]
+    fake["regions"] = SamError("down")
+    assert post_scan(client).json()["outcome"] == "total"
+
+
+def test_sam_fewer_than_muse_lay_flat(client, fake):
+    fake["labels"] = ["100", "50", "10"]
+    fake["regions"] = THREE[:2]
+    body = post_scan(client).json()
+    assert body["outcome"] == "guide"
+    assert body["hint"]["action"] == "lay_flat"
+    assert len(body["notes"]) == 3
+    assert "Spread the notes apart" in body["speech"]["en"]
 
 
 def test_change_short(client, fake):

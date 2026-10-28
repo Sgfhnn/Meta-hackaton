@@ -97,23 +97,15 @@ def decide(
     elif outcome == "guide":
         idx, covered_by, reason = pick_target(regions, len(labels))
         target = regions[idx]
+        action = "lay_flat" if reason == "merged" else "slide_out"
         pos = position(target.box)
-        notes.append(
-            {
-                "denomination": None,
-                "confidence": round(target.score, 4),
-                "box": [round(v, 4) for v in target.box],
-                "status": "partial",
-                "label": None,
-            }
-        )
         result["hint"] = {
-            "note_index": len(notes) - 1,
+            "note_index": None,  # the region has no per-note read, so no synthetic note is added
             "position": pos,
             "covered_by": covered_by,
-            "action": "slide_out",
+            "action": action,
         }
-        text = say.guide_text(pos, "slide_out", reason)
+        text = say.guide_text(pos, action, reason)
     elif not labels and not regions:
         text = say.NO_NOTES
     else:
