@@ -74,13 +74,14 @@ The user taps and speaks. Gemini transcribes the audio and extracts the intent.
 | `notes[].status` | `read` (counted), `partial` (covered or cut off, so it triggers `guide`), or `unclear` (unreadable or out of scope, so it triggers `rescan`). |
 | `notes[].box` | `[x, y, w, h]`, normalized 0–1, top-left origin. |
 | `notes[].denomination` | One of 5, 10, 50, 100, 200, or `null` when not read. |
+| `notes[].confidence`, `notes[].box` | May be `null`: the per-photo Muse read gives neither. SAM fills `box` for the note a hint targets. |
 | `hint` | For `guide` only: `{"note_index": 1, "position": "near center", "relation": "under_top", "covered_by": 0, "action": "slide_out"}`. `position` is from the user's point of view (near/far, left/right). `relation` is optional: `under_top` or `next_to`. `covered_by` is the index of the note on top, if any. `action` is one of `slide_out`, `lay_flat`, `move_closer` or `more_light`. A hint targets **one note at a time**, the most covered first; the app rescans after each move. |
 | `speech` | The text the app speaks (Gemini TTS). The backend writes it, and the app speaks it word for word. |
 | `timing_ms` | Latency per stage, for monitoring. |
 
-**When SAM's count and Muse's count disagree:** if SAM found more regions than Muse read, the outcome is `guide` (likely a covered note). If SAM found fewer, the outcome is `rescan`. Fanned notes can over-segment SAM, so the filter (confidence, min-area, overlap dedupe) runs before counting.
+**When SAM's count and Muse's count disagree:** if SAM found more regions than Muse read, the outcome is `guide` (likely a covered note). If SAM found fewer (likely two notes merged into one region), the outcome is `guide` with `action: "lay_flat"` (spread the notes apart); `note_index` may point at the largest region. Fanned notes can over-segment SAM, so the filter (confidence, min-area, overlap dedupe) runs before counting.
 
-**If SAM is unavailable:** the count check can't run, so the outcome is always `rescan`. No total is spoken without the count check.
+**If SAM is unavailable:** the count check can't run, so the outcome is `rescan`. A `MUSE_ONLY_TOTALS` flag may allow a Muse-only total when every note reads as valid, but it defaults to **off**: dev showed 0 wrong totals on only 8 photos, which is too small to drop the cross-check for blind users.
 
 **Spoken totals:** the app may assemble a total from pre-recorded clips ("you have", the number, "birr") using `total`, and use TTS only for other phrases. `speech` is still always filled in.
 
