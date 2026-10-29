@@ -15,6 +15,7 @@ import json
 import os
 import statistics
 import time
+import uuid
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,7 +47,7 @@ CROP_PROMPT = (
 )
 
 _calls = {"day": "", "n": 0}
-_sem = asyncio.Semaphore(int(os.getenv("LAB_CONCURRENCY", "8")))
+_sem = asyncio.Semaphore(int(os.getenv("LAB_CONCURRENCY", "12")))
 
 
 def _lab_dir() -> Path:
@@ -323,8 +324,9 @@ async def lab_help():
             "GET /lab/photos": "sets, photo names, truths",
             "GET /lab/photos/{set}/{name}": "the JPEG itself",
             "GET /lab/defaults": "live prompt, crop prompt, reference captions, models, SAM filter",
-            "POST /lab/read": "one photo, one read config -> labels, raw reply, total, ms, SAM boxes",
-            "POST /lab/eval": "a whole set with N parallel reads + the agreement/SAM rule -> scoreboard",
+            "POST /lab/read": "(keep under ~50 s; use eval for slow configs) one photo, one read config -> labels, raw reply, total, ms, SAM boxes",
+            "POST /lab/eval": "a whole set with N parallel reads + the agreement/SAM rule -> job_id; poll GET /lab/eval/{job_id} for the scoreboard",
+            "GET /lab/evals": "all runs since the last restart with their summaries",
             "GET /lab/usage": "Muse calls used today vs limit",
         },
         "rules": "Tune on 'dev' only. 'locked' is for error analysis, never for tuning.",
@@ -379,11 +381,45 @@ async def lab_read(req: ReadRequest, request: Request):
     return {"photo": req.photo, "truth": truth, "read": r, "sam": sam_res}
 
 
+_jobs: dict[str, dict] = {}
+
+
 @router.post("/eval")
 async def lab_eval(req: EvalRequest, request: Request):
+    """Starts the run and returns a job id at once (the public proxy cuts long requests)."""
+    job_id = uuid.uuid4().hex[:12]
+    _jobs[job_id] = {"status": "running", "started": time.time(), "request": req.model_dump()}
+
+    async def work():
+        try:
+            _jobs[job_id].update(status="done", result=await _eval(req, request.app.state.http))
+        except HTTPException as exc:
+            _jobs[job_id].update(status="failed", error=exc.detail)
+        except Exception as exc:  # noqa: BLE001
+            _jobs[job_id].update(status="failed", error=f"{type(exc).__name__}: {exc}")
+        _jobs[job_id]["seconds"] = round(time.time() - _jobs[job_id]["started"], 1)
+
+    _jobs[job_id]["task"] = asyncio.create_task(work())
+    return {"job_id": job_id, "status": "running", "poll": f"/lab/eval/{job_id}"}
+
+
+@router.get("/eval/{job_id}")
+async def lab_eval_status(job_id: str):
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="no such job (jobs are lost on restart)")
+    return {k: v for k, v in job.items() if k != "task"}
+
+
+@router.get("/evals")
+async def lab_evals():
+    return [{"job_id": k, "status": v["status"], "summary": (v.get("result") or {}).get("summary")}
+            for k, v in _jobs.items()]  # fmt: skip
+
+
+async def _eval(req: EvalRequest, client: httpx.AsyncClient) -> dict:
     truths = _truths(req.set)
     names = req.photos or sorted(p.stem for p in (_lab_dir() / req.set).glob("*.jpg"))
-    client = request.app.state.http
 
     async def one(name: str) -> dict:
         raw, truth = _load_photo(f"{req.set}/{name}")
