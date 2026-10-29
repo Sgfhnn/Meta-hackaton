@@ -115,18 +115,17 @@ def test_per_note_objects_are_accepted():
 
 def test_prompt_has_colour_rule_and_reference_sheets():
     for fact in (
-        "5 pale blue-grey, 10 green, 50 red/orange, 100 full blue, 200 purple",
+        "purple/lilac = 200, red/pink = 50, bright green = 10, periwinkle blue = 100",
         "፪፻",
         "Walia ibex",
         "Harar gate",
         "three chimneys",
         "camels",
-        "its colour counts",
-        "exactly once",
-        "Do not add totals",
+        "Colour alone can decide a value",
+        "Count a note once",
+        "Never add up the notes",
     ):
         assert fact in PROMPT
-    assert "Colour alone" not in PROMPT  # PR #9's two-signal rule is not used
 
 
 def test_sam_request_and_regions(monkeypatch):
