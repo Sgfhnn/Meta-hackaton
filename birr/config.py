@@ -37,6 +37,17 @@ class Settings:
     )
     sam_key: str = field(default_factory=lambda: os.getenv("ROBOFLOW_API_KEY", ""))
     image_max_px: int = field(default_factory=lambda: int(os.getenv("IMAGE_MAX_PX", "768")))
+    # Size of the photo sent to Muse. SAM always gets IMAGE_MAX_PX. 2048 = Muse's narrowed design
+    # (lab runs 7-9: the plain read went 9/20 -> 17/20 on the locked set at full size).
+    muse_max_px: int = field(
+        default_factory=lambda: int(os.getenv("MUSE_MAX_PX") or os.getenv("IMAGE_MAX_PX", "768"))
+    )
+    # SAM filter. Live 0.6 / 0.015; Muse's design 0.5 / 0.005 (keeps fan strips).
+    sam_min_score: float = field(default_factory=lambda: float(os.getenv("SAM_MIN_SCORE", "0.6")))
+    sam_min_area: float = field(default_factory=lambda: float(os.getenv("SAM_MIN_AREA", "0.015")))
+    # SAM_ADVISORY=1: when both reads agree (same notes, none unclear) the total is spoken and
+    # SAM's count is only logged. Off = the live rule, where SAM's count must match.
+    sam_advisory: bool = field(default_factory=lambda: _flag("SAM_ADVISORY", False))
     max_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     )

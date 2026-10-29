@@ -5,6 +5,8 @@ Rules (docs/api.md):
   valid denominations) AND SAM's filtered count to equal that note count.
 - One read (the retry after a slow or failed two-read stage): never gives a total. It ends as
   guide when SAM's count differs, else rescan (single read + SAM spoke wrong totals in tests).
+- SAM_ADVISORY on (Muse's narrowed design, Oct 30): two agreeing reads give the total and SAM's
+  count is logged only (path agree_sam_advisory). Disagreement still ends as guide or rescan.
 - SAM unavailable: a Muse-only total is allowed only if MUSE_ONLY_TOTALS is on and two reads
   agree; otherwise rescan, never guide.
 """
@@ -75,6 +77,7 @@ def decide(
     attempt: int,
     max_attempts: int,
     muse_only_totals: bool,
+    sam_advisory: bool = False,
 ) -> dict:
     """Return outcome, total, change, notes, hint and English speech text.
 
@@ -97,18 +100,26 @@ def decide(
     sam_ok = regions is not None
 
     two_reads = len(reads) >= 2
-    if sam_ok:
+    path = None
+    if sam_advisory and two_reads and agreed and sam_ok:
+        # Muse's narrowed design: two agreeing reads speak; SAM's count is logged only.
+        outcome = "total"
+        path = "agree_sam_match" if sam_ok and len(regions) == len(labels) else "agree_sam_advisory"
+    elif sam_ok:
         counts_match = len(regions) == len(labels)
         if counts_match and agreed and two_reads:
             outcome = "total"
+            path = "agree_sam_match"
         elif same_count and not counts_match and regions:
             outcome = "guide"
         else:
             outcome = "rescan"
     else:
         outcome = "total" if (muse_only_totals and two_reads and agreed) else "rescan"
+        path = "agree_no_sam" if outcome == "total" else None
 
-    result = {"outcome": outcome, "total": None, "change": None, "notes": notes, "hint": None}
+    result = {"outcome": outcome, "total": None, "change": None, "notes": notes, "hint": None,
+              "path": path}  # fmt: skip
 
     if outcome == "total":
         amount = money.total(values)

@@ -101,13 +101,19 @@ async def scan(
     if len(raw) > settings.max_upload_bytes:
         return fail(400, "bad_request", say.BAD_REQUEST, "image too large")
     try:
-        jpeg, width, height = prepare_jpeg(raw, settings.image_max_px)
+        jpeg, width, height = prepare_jpeg(raw, max(settings.image_max_px, settings.muse_max_px))
+        sam_jpeg, sam_w, sam_h = jpeg, width, height
+        if settings.muse_max_px > settings.image_max_px:
+            sam_jpeg, sam_w, sam_h = prepare_jpeg(jpeg, settings.image_max_px)
     except BadImage as exc:
         return fail(400, "bad_request", say.BAD_REQUEST, str(exc))
-    trace["image"] = {"width": width, "height": height}
+    trace["image"] = {"width": width, "height": height, "sam": [sam_w, sam_h]}
 
     req = ScanRequest(intent, lang, paid, price, attempt, max_attempts)
-    work = scan_flow.execute(app.state.http, jpeg, width, height, req, settings, trace_id, trace)
+    work = scan_flow.execute(
+        app.state.http, jpeg, width, height, req, settings, trace_id, trace,
+        sam_image=(sam_jpeg, sam_w, sam_h),
+    )  # fmt: skip
     crash, _ = say.speech(say.TRY_AGAIN, lang)
     crash_body = {"error": "upstream_error", "speech": crash, "trace_id": trace_id}
     job = app.state.jobs.start(trace_id, lang, work, crash_body, settings.job_ttl_s)

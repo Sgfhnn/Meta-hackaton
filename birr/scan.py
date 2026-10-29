@@ -127,12 +127,14 @@ async def execute(
     settings: Settings,
     trace_id: str,
     trace: dict,
+    sam_image: tuple[bytes, int, int] | None = None,
 ) -> tuple[int, dict]:
     """Run one scan. Returns (http status, body) and writes the trace."""
     started = time.perf_counter()
     deadline = started + settings.scan_deadline_s
     trace["timing_ms"] = {}
-    sam_task = asyncio.create_task(_sam(client, jpeg, width, height, settings))
+    sam_jpeg, sam_w, sam_h = sam_image or (jpeg, width, height)
+    sam_task = asyncio.create_task(_sam(client, sam_jpeg, sam_w, sam_h, settings))
     try:
         reads, mode, timed_out = await collect_reads(client, jpeg, settings, deadline, trace)
         left = max(0.0, deadline - time.perf_counter())
@@ -150,7 +152,9 @@ async def execute(
 
     regions = None
     if sam_result["ok"]:
-        regions, decisions = filter_regions(sam_result["regions"])
+        regions, decisions = filter_regions(
+            sam_result["regions"], settings.sam_min_score, settings.sam_min_area
+        )
         trace["sam"] = {
             "raw_count": len(sam_result["regions"]),
             "kept": len(regions),
@@ -190,10 +194,13 @@ async def execute(
         attempt=req.attempt,
         max_attempts=req.max_attempts,
         muse_only_totals=settings.muse_only_totals,
+        sam_advisory=settings.sam_advisory,
     )
     text = result.pop("speech_en")
     trace.update(
         sam_available=regions is not None,
+        sam_advisory=settings.sam_advisory,
+        path=result.pop("path", None),
         muse_only_totals=settings.muse_only_totals,
         muse={"labels": reads[0], "reads_used": reads},
         outcome=result["outcome"],
