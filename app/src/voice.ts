@@ -12,7 +12,6 @@ const LOCALE: Record<Lang, string> = { en: 'en-US', am: 'am-ET', om: 'om-ET' };
 export const PROMPTS = {
   counting: 'Counting.',
   stillCounting: 'Still counting.',
-  slowRetry: 'This is taking long. Trying a quicker count.',
   failed: 'Sorry, I could not count that. Please tap to try again.',
   noNetwork: 'I cannot reach the server. Check the internet connection and tap to try again.',
   giveUp: 'I cannot count these notes. Please spread them out flat and start again.',

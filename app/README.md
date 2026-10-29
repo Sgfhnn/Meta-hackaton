@@ -19,10 +19,11 @@ With `EXPO_PUBLIC_API_URL` empty (or `mock`), the app runs in **demo mode**. It 
 ## What it does
 
 - **Tap anywhere** (the whole screen is one button, labelled for TalkBack): a vibration and "Counting." play before any network call.
-- **While waiting:** a soft vibration tick every 2 s, and "Still counting." every 8 s.
 - **Photo:** resized to 1280 px on the longest side and re-encoded as JPEG, which drops EXIF data including GPS.
+- **Scan:** `POST /scan` starts a job (202 with a `job_id`), and the app polls `GET /scan/{job_id}` every `poll_after_ms` until it is done. A backend that answers the POST with the result directly (200) works too.
+- **While waiting:** a soft vibration tick every 2 s, and "Still counting." once after about 10 s.
 - **Answer:** the app speaks the backend's `speech` text word for word, in the chosen language if this phone has a voice for it, otherwise in English. Totals vibrate as success, and guide or rescan answers as a warning.
-- **Slow scans:** after 60 s the app cancels and retries once with `fast=1` (the backend then runs a single read). If that also fails, it asks the user to try again.
+- **Slow scans:** the backend ends a scan at 60 s with a rescan answer. The app gives up on its own only after 90 s, which covers a lost connection.
 - **Rescans:** after a `guide` or `rescan` answer, the next tap sends `attempt + 1`, up to 3 attempts.
 - **Language button** (top right): cycles English, then Amharic and Afaan Oromoo if the phone has those voices.
 

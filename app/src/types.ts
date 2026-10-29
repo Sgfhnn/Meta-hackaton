@@ -40,6 +40,21 @@ export type ScanRequest = {
   lang: Lang;
   attempt: number;
   maxAttempts: number;
-  // Retry after a slow scan: the backend runs a single read instead of two (agreed with Hark).
-  fast: boolean;
+};
+
+// POST /scan starts a job (202); GET /scan/{job_id} reports on it (docs/api.md, scan v2).
+export type JobStarted = {
+  job_id: string;
+  status: 'pending';
+  poll_url?: string;
+  poll_after_ms?: number;
+};
+
+export type JobStatus = {
+  job_id: string;
+  status: 'pending' | 'done' | 'error';
+  result: ScanResponse | null;
+  poll_after_ms?: number;
+  error?: string;
+  speech?: Speech;
 };

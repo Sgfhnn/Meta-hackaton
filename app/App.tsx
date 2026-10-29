@@ -12,9 +12,10 @@ import type { Lang } from './src/types';
 import { loadVoices, pickSpeech, PROMPTS, say, sayQueued } from './src/voice';
 
 const MAX_ATTEMPTS = 3; // docs/api.md: app default
-const SCAN_TIMEOUT_MS = 60_000; // hard limit, then one quicker retry (agreed with Hark)
+// The backend ends a slow scan itself at 60 s (as a rescan answer). This only covers a lost connection.
+const SCAN_TIMEOUT_MS = 90_000;
 const TICK_MS = 2_000; // docs/api.md: a soft tick every 2 s, so silence never means "broken"
-const STILL_COUNTING_EVERY = 4; // ticks, so "still counting" every 8 s
+const STILL_COUNTING_AT_TICK = 5; // docs/api.md: "Still counting." once, after about 10 s
 const LANG_NAMES: Record<Lang, string> = { en: 'English', am: 'Amharic', om: 'Afaan Oromoo' };
 
 export default function App() {
@@ -77,17 +78,13 @@ export default function App() {
     const ticker = setInterval(() => {
       ticks += 1;
       Haptics.selectionAsync();
-      if (ticks % STILL_COUNTING_EVERY === 0) sayQueued(PROMPTS.stillCounting);
+      if (ticks === STILL_COUNTING_AT_TICK) sayQueued(PROMPTS.stillCounting);
     }, TICK_MS);
     try {
       const photo = await camera.current.takePictureAsync({ quality: 0.8 });
       const jpeg = await preparePhoto(photo.uri, photo.width, photo.height);
-      const req = { lang, attempt: attempt.current, maxAttempts: MAX_ATTEMPTS, fast: false };
-      let result = await scan(jpeg, req, SCAN_TIMEOUT_MS);
-      if (result.kind === 'timeout') {
-        announce(PROMPTS.slowRetry);
-        result = await scan(jpeg, { ...req, fast: true }, SCAN_TIMEOUT_MS);
-      }
+      const req = { lang, attempt: attempt.current, maxAttempts: MAX_ATTEMPTS };
+      const result = await scan(jpeg, req, SCAN_TIMEOUT_MS);
       clearInterval(ticker);
       handle(result);
     } catch {
