@@ -5,8 +5,6 @@ Run: uv run uvicorn birr.api:app --reload
 
 from __future__ import annotations
 
-import asyncio
-import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -15,20 +13,23 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from birr.agent.decide import decide
+from birr import scan as scan_flow
 from birr.agent.trace import new_trace_id, write_trace
 from birr.config import get_settings
 from birr.image import BadImage, prepare_jpeg
-from birr.read import muse
-from birr.segment import sam
-from birr.segment.filter import filter_regions
+from birr.jobs import JobStore
+from birr.scan import ScanRequest
 from birr.voice import speech as say
+
+POLL_AFTER_MS = 1500
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.http = httpx.AsyncClient(timeout=get_settings().scan_timeout_s)
+    app.state.http = httpx.AsyncClient(timeout=get_settings().scan_deadline_s)
+    app.state.jobs = JobStore()
     yield
+    await app.state.jobs.close()
     await app.state.http.aclose()
 
 
@@ -48,12 +49,6 @@ async def _validation_error(request: Request, exc: RequestValidationError):
     return _error(400, "bad_request", say.BAD_REQUEST)
 
 
-async def _timed(coro) -> tuple[object, int]:
-    start = time.perf_counter()
-    result = await coro
-    return result, int((time.perf_counter() - start) * 1000)
-
-
 @app.post("/scan")
 async def scan(
     image: Annotated[UploadFile, File()],
@@ -63,10 +58,11 @@ async def scan(
     price: Annotated[int | None, Form()] = None,
     attempt: Annotated[int, Form()] = 1,
     max_attempts: Annotated[int, Form()] = 3,
+    wait: Annotated[bool, Form()] = False,
 ):
+    """Validate, then start a scan job. Returns 202 + job_id (or the result when wait=true)."""
     settings = get_settings()
     trace_id = new_trace_id()
-    started = time.perf_counter()
     lang = lang if lang in ("en", "am", "om") else "en"
     trace: dict = {
         "endpoint": "/scan",
@@ -92,59 +88,40 @@ async def scan(
         return fail(400, "bad_request", say.BAD_REQUEST, str(exc))
     trace["image"] = {"width": width, "height": height}
 
-    client: httpx.AsyncClient = app.state.http
-
-    async def run_sam():
-        try:
-            return await _timed(sam.segment(client, jpeg, width, height, settings))
-        except (TimeoutError, sam.SamError) as exc:
-            trace["sam_error"] = str(exc) or type(exc).__name__
-            return None, None
-
-    try:
-        (labels, muse_ms), (raw_regions, sam_ms) = await asyncio.wait_for(
-            asyncio.gather(_timed(muse.read_notes(client, jpeg, settings)), run_sam()),
-            timeout=settings.scan_timeout_s,
-        )
-    except TimeoutError:
-        return fail(504, "upstream_timeout", say.TOO_SLOW, "scan exceeded timeout")
-    except muse.MuseError as exc:
-        return fail(502, "upstream_error", say.TRY_AGAIN, str(exc))
-
-    regions = None
-    if raw_regions is not None:
-        regions, decisions = filter_regions(raw_regions)
-        trace["sam"] = {"raw_count": len(raw_regions), "kept": len(regions), "filter": decisions}
-    trace["muse"] = {"labels": labels}
-
-    result = decide(
-        labels,
-        regions,
-        intent=intent,
-        paid=paid,
-        price=price,
-        attempt=attempt,
-        max_attempts=max_attempts,
-        muse_only_totals=settings.muse_only_totals,
+    req = ScanRequest(intent, lang, paid, price, attempt, max_attempts)
+    work = scan_flow.execute(app.state.http, jpeg, width, height, req, settings, trace_id, trace)
+    crash, _ = say.speech(say.TRY_AGAIN, lang)
+    crash_body = {"error": "upstream_error", "speech": crash, "trace_id": trace_id}
+    job = app.state.jobs.start(trace_id, lang, work, crash_body, settings.job_ttl_s)
+    if wait:
+        await job.task
+        return JSONResponse(status_code=job.http_status, content=job.body)
+    return JSONResponse(
+        status_code=202,
+        content={
+            "job_id": job.job_id,
+            "status": "pending",
+            "poll_url": f"/scan/{job.job_id}",
+            "poll_after_ms": POLL_AFTER_MS,
+            "trace_id": trace_id,
+        },
     )
-    text = result.pop("speech_en")
-    spoken, todo = say.speech(text, lang)
-    timing = {"muse": muse_ms, "sam": sam_ms, "total": int((time.perf_counter() - started) * 1000)}
-    body = {**result, "speech": spoken, "trace_id": trace_id, "timing_ms": timing}
-    if todo:
-        body["speech_todo"] = todo
-    trace.update(
-        sam_available=regions is not None,
-        muse_only_totals=settings.muse_only_totals,
-        outcome=result["outcome"],
-        total=result["total"],
-        change=result["change"],
-        hint=result["hint"],
-        speech_en=text,
-        timing_ms=timing,
-    )
-    write_trace(settings.trace_dir, trace_id, trace)
-    return body
+
+
+@app.get("/scan/{job_id}")
+async def scan_status(job_id: str):
+    job = app.state.jobs.get(job_id)
+    if job is None:
+        return _error(404, "not_found", say.TRY_AGAIN)
+    content = {"job_id": job.job_id, "status": job.status, "elapsed_ms": job.elapsed_ms}
+    if job.status == "pending":
+        spoken, _ = say.speech(say.STILL_COUNTING, job.lang)
+        content.update(result=None, poll_after_ms=POLL_AFTER_MS, speech=spoken)
+    elif job.status == "done":
+        content["result"] = job.body
+    else:
+        content.update(result=None, **job.body)
+    return content
 
 
 @app.post("/intent", status_code=501)

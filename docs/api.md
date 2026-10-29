@@ -9,7 +9,7 @@ Scope: birr notes of 5, 10, 50, 100 and 200 (the denominations in the gate label
 ## Core rules
 
 1. **The backend computes totals and change in code**, from the per-note reads. The model never states a total.
-2. **A total is only spoken when we're sure.** That means: SAM's note count equals Muse's note count, no note is `partial` or `unclear`, and every denomination is in scope. Otherwise the outcome is `guide` or `rescan`, and `total` is `null`.
+2. **A total is only spoken when we're sure.** That means: two independent Muse reads of the photo list the same notes (the same multiset of denominations, order ignored), SAM's note count equals that note count, no note is `partial` or `unclear`, and every denomination is in scope. Otherwise the outcome is `guide` or `rescan`, and `total` is `null`. The one exception to "two reads" is the slow-scan retry in §2.1, which uses a single read and still needs SAM's count to match.
 3. **No images are stored.** The backend keeps only the trace (§4). The app strips EXIF metadata, including GPS location, before uploading.
 
 ## 1. `POST /intent`: what the user asked
@@ -37,6 +37,8 @@ The user taps and speaks. Gemini transcribes the audio and extracts the intent.
 
 ## 2. `POST /scan`: count the notes
 
+A scan can take from a few seconds to a minute (Baseten latency varies a lot), so `/scan` is a job: `POST /scan` checks the request and returns a `job_id` at once, and the app polls `GET /scan/{job_id}` until the status is `done` or `error`. While it is `pending`, the app plays its tick and may speak `speech` ("Still counting.").
+
 **Request:** `multipart/form-data`
 | Field | Type | Notes |
 |---|---|---|
@@ -47,8 +49,37 @@ The user taps and speaks. Gemini transcribes the audio and extracts the intent.
 | `price` | int | `change` only |
 | `attempt` | int | starts at 1, then +1 on each rescan |
 | `max_attempts` | int | optional. App default 3. The gate run uses 2 (one rescan), matching gate v2 |
+| `wait` | bool | optional, default `false`. `true` runs the scan inside the request and returns the result body below directly (for eval scripts and curl; the app should poll) |
 
-**Response 200**
+**Response 202** (job started)
+```json
+{"job_id": "b7e2…", "status": "pending", "poll_url": "/scan/b7e2…", "poll_after_ms": 1500, "trace_id": "b7e2…"}
+```
+`job_id` is the scan's `trace_id`. Bad requests (missing field, not JPEG, change without a price) still answer `400` at once, with no job.
+
+### `GET /scan/{job_id}`: poll the job
+
+```json
+{"job_id": "b7e2…", "status": "pending", "elapsed_ms": 9100, "result": null, "poll_after_ms": 1500, "speech": {"en": "Still counting."}}
+{"job_id": "b7e2…", "status": "done", "elapsed_ms": 14200, "result": { …the scan result below… }}
+{"job_id": "b7e2…", "status": "error", "elapsed_ms": 3000, "result": null, "error": "upstream_error", "speech": {"en": "Sorry, I couldn't check that. Please try again."}, "trace_id": "b7e2…"}
+```
+| `status` | Meaning |
+|---|---|
+| `pending` | Still counting. Poll again after `poll_after_ms`. |
+| `done` | `result` holds the scan result (the body below). Its `outcome` may still be `guide` or `rescan`. |
+| `error` | Every Muse read failed. Speak `speech` and let the user try again. |
+
+An unknown or expired `job_id` (finished jobs are kept `JOB_TTL_S`, default 10 min) answers `404` with `error: "not_found"` and `speech`. Jobs live in the backend process, so it runs as **one** uvicorn worker.
+
+### 2.1 How a scan runs
+
+1. SAM and two Muse reads (`MUSE_READS=2`, `reasoning_effort` low) start in parallel on the same resized photo.
+2. **Two-read path.** If both reads are back within `TWO_READ_TIMEOUT_S` (default 40 s), the decision uses both: a total needs the two reads to list the same notes **and** SAM's count to match.
+3. **Single-read retry.** If a read is slow or fails, the scan retries once with a single read: it uses a read that already came back, or else starts one more read (on the fallback reader when `MUSE_FALLBACK=cline`) and takes the first read that finishes. A single read gives a total only when every note is valid **and** SAM's count matches; never when SAM is unavailable.
+4. **Hard limit.** The whole scan stops at `SCAN_DEADLINE_S` (default 60 s). If no read is back by then, the job finishes as `done` with `outcome: "rescan"` and a "that took too long" prompt, not an error, so the app's rescan loop carries on. SAM not back by then counts as SAM unavailable.
+
+**Scan result** (`result` of a `done` job, or the direct response with `wait=true`)
 ```json
 {
   "outcome": "total",
@@ -77,34 +108,38 @@ The user taps and speaks. Gemini transcribes the audio and extracts the intent.
 | `notes[].confidence`, `notes[].box` | May be `null`: the per-photo Muse read gives neither. SAM fills `box` for the note a hint targets. |
 | `hint` | For `guide` only: `{"note_index": 1, "position": "near center", "relation": "under_top", "covered_by": 0, "action": "slide_out"}`. `position` is from the user's point of view (near/far, left/right). `relation` is optional: `under_top` or `next_to`. `covered_by` is the index of the note on top, if any. `action` is one of `slide_out`, `lay_flat`, `move_closer` or `more_light`. A hint targets **one note at a time**, the most covered first; the app rescans after each move. |
 | `speech` | The text the app speaks (Gemini TTS). The backend writes it, and the app speaks it word for word. |
-| `timing_ms` | Latency per stage, for monitoring. |
+| `timing_ms` | Latency per stage, for monitoring: `muse` (the whole read stage, retry included), `sam` and `total`. The trace has the full breakdown: each read's ms, the two-read stage, the retry and SAM. |
+
+**When the two reads disagree** (different notes or a different number of notes): the outcome is `rescan`, unless both reads agree on the count and SAM's count differs, which is `guide` as below.
 
 **When SAM's count and Muse's count disagree:** if SAM found more regions than Muse read, the outcome is `guide` (likely a covered note). If SAM found fewer (likely two notes merged into one region), the outcome is `guide` with `action: "lay_flat"` (spread the notes apart); `note_index` may point at the largest region. Fanned notes can over-segment SAM, so the filter (confidence, min-area, overlap dedupe) runs before counting.
 
-**If SAM is unavailable:** the count check can't run, so the outcome is `rescan`. A `MUSE_ONLY_TOTALS` flag may allow a Muse-only total when every note reads as valid, but it defaults to **off**: dev showed 0 wrong totals on only 8 photos, which is too small to drop the cross-check for blind users.
+**If SAM is unavailable:** the count check can't run, so the outcome is `rescan`. A `MUSE_ONLY_TOTALS` flag may allow a Muse-only total when two reads agree and every note reads as valid (never on a single read), but it defaults to **off**: dev showed 0 wrong totals on only 8 photos, which is too small to drop the cross-check for blind users.
 
 **Spoken totals:** the app may assemble a total from pre-recorded clips ("you have", the number, "birr") using `total`, and use TTS only for other phrases. `speech` is still always filled in.
 
 ## 3. Errors
 
-Any non-200 response carries spoken text, so the user always hears something:
+Any non-200 response (and any `error` job) carries spoken text, so the user always hears something:
 ```json
 {"error": "upstream_timeout", "speech": {"am": "...", "en": "Sorry, I couldn't check that. Please try again."}}
 ```
 | Status | `error` |
 |---|---|
 | 400 | `bad_request`: missing field, unsupported file type, or image too large |
-| 502 | `upstream_error`: Muse, SAM or TTS failed |
-| 504 | `upstream_timeout`: the scan took longer than 20 s |
+| 404 | `not_found`: unknown or expired `job_id` on `GET /scan/{job_id}` |
+| 502 | `upstream_error`: every Muse read failed (as the `error` of a job, or directly with `wait=true`). SAM failing alone is not an error: the outcome is `rescan` |
+
+A scan that runs past the 60 s limit is not an error: it ends as `outcome: "rescan"` (§2.1).
 
 ## 4. Trace
 
-Each `/scan` and `/intent` call writes one JSON trace, keyed by `trace_id`. It records the inputs (minus image and audio), each model call with its timing, per-note reads, filter decisions, the outcome, and the speech text. Traces show judges the agent loop. They contain no images, audio or personal data.
+Each `/scan` and `/intent` call writes one JSON trace, keyed by `trace_id`. It records the inputs (minus image and audio), each Muse read (reader, labels or error, ms), whether the scan used two reads or the single-read retry and why, SAM's raw and kept counts with its timing, the stage timings, per-note reads, filter decisions, the outcome, and the speech text. Traces show judges the agent loop. They contain no images, audio or personal data.
 
 ## 5. App behaviour
 
 - **On tap:** play a short audio cue within 1 s, before any network call.
-- **While waiting:** play a soft tick every 2 s, so silence never means "broken".
+- **While waiting:** poll `GET /scan/{job_id}` every `poll_after_ms` and play a soft tick every 2 s, so silence never means "broken". After about 10 s, speak the pending `speech` ("Still counting.") once.
 - **`total`:** speak the `speech` text in the user's language.
 - **`guide`:** speak the hint, then capture again with `attempt` + 1.
 - **`rescan`:** speak the prompt, then capture again. After `max_attempts`, say that it can't count these notes, and stop.

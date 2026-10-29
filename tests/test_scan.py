@@ -163,17 +163,20 @@ def test_error_muse_down_is_502(client, fake):
     assert r.json()["speech"]["en"]
 
 
-def test_timeout_is_504(client, fake, monkeypatch):
-    monkeypatch.setenv("SCAN_TIMEOUT_S", "0.05")
+def test_deadline_gives_rescan_not_error(client, fake, monkeypatch):
+    monkeypatch.setenv("SCAN_DEADLINE_S", "0.2")
+    monkeypatch.setenv("TWO_READ_TIMEOUT_S", "0.1")
 
     async def slow(*args, **kwargs):
         await asyncio.sleep(1)
 
     monkeypatch.setattr(muse, "read_notes", slow)
     r = post_scan(client)
-    assert r.status_code == 504
-    assert r.json()["error"] == "upstream_timeout"
-    assert r.json()["speech"]["en"]
+    assert r.status_code == 200
+    body = r.json()
+    assert body["outcome"] == "rescan"
+    assert body["total"] is None
+    assert "too long" in body["speech"]["en"]
 
 
 def test_trace_written_without_image(client, fake):

@@ -40,7 +40,36 @@ class Settings:
     max_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     )
-    scan_timeout_s: float = field(default_factory=lambda: float(os.getenv("SCAN_TIMEOUT_S", "20")))
+    # Reader settings. Two Muse reads run in parallel; a total needs both to list the same notes.
+    muse_reads: int = field(default_factory=lambda: int(os.getenv("MUSE_READS", "2")))
+    # OpenAI-style reasoning_effort sent to Muse. Empty string leaves it out of the request.
+    muse_reasoning_effort: str = field(
+        default_factory=lambda: os.getenv("MUSE_REASONING_EFFORT", "low").strip()
+    )
+    # Optional fallback reader (Muse Spark 1.3 contributor via the Cline API). Off by default.
+    # When on, the single-read retry after a slow two-read stage goes to this reader.
+    fallback_reader: str = field(
+        default_factory=lambda: os.getenv("MUSE_FALLBACK", "none").strip().lower()
+    )
+    cline_url: str = field(
+        default_factory=lambda: (
+            os.getenv("CLINE_BASE_URL", "https://api.cline.bot/api/v1").rstrip("/")
+            + "/chat/completions"
+        )
+    )
+    cline_model: str = field(
+        default_factory=lambda: os.getenv("CLINE_MODEL", "meta/muse-spark-1.3-contributor")
+    )
+    cline_key: str = field(default_factory=lambda: os.getenv("CLINE_API_KEY", ""))
+    # Hard limit for one scan job, everything included.
+    scan_deadline_s: float = field(
+        default_factory=lambda: float(os.getenv("SCAN_DEADLINE_S", "60"))
+    )
+    # How long the two-read stage may take before the scan falls back to a single read.
+    two_read_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("TWO_READ_TIMEOUT_S", "40"))
+    )
+    job_ttl_s: float = field(default_factory=lambda: float(os.getenv("JOB_TTL_S", "600")))
     sam_timeout_s: float = field(default_factory=lambda: float(os.getenv("SAM_TIMEOUT_S", "8")))
     # Pending team decision: when SAM is down, may a Muse-only read produce a total?
     muse_only_totals: bool = field(default_factory=lambda: _flag("MUSE_ONLY_TOTALS", False))
