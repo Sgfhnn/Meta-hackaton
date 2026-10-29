@@ -38,6 +38,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Birr backend", lifespan=lifespan)
 
+if os.environ.get("LAB_TOKEN"):
+    from birr.lab import router as lab_router
+
+    app.include_router(lab_router)
+
 _origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 if _origins:
     app.add_middleware(

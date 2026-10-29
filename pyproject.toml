@@ -38,3 +38,4 @@ testpaths = ["tests"]
 
 [tool.ruff.lint.per-file-ignores]
 "birr/read/prompt.py" = ["E501"]  # the reader prompt lines
+"birr/lab.py" = ["E501"]  # lab request/response literals
