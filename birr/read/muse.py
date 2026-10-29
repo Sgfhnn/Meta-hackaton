@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 
 import httpx
 
@@ -65,20 +66,64 @@ def _endpoint(settings: Settings, reader: str) -> tuple[str, str, str]:
     return settings.muse_url, settings.muse_model, settings.muse_key
 
 
-def request_body(jpeg: bytes, model: str, settings: Settings) -> dict:
+REFS_INTRO = (
+    "Reference images of Ethiopian birr notes follow. Use them to judge colours and pictures. "
+    "They are NOT part of the photo to read."
+)
+REF_SHEETS = (
+    (
+        "clean_sheet.jpg",
+        "Reference sheet 1: clean notes, each tile shows the front (top) and back (bottom). "
+        "Each tile is labelled with its value.",
+    ),
+    (
+        "real_sheet.jpg",
+        "Reference sheet 2: real, worn notes photographed in daylight and in warm indoor light. "
+        "Each tile is labelled. Note how the 100 looks pale blue with a peach cave, the worn 5 is "
+        "grey-blue on whitish or yellowed paper, the 50 turns orange in warm light, and the 200 "
+        "turns pink in warm light.",
+    ),
+)
+PHOTO_LABEL = "Photo to read:"
+
+_refs_cache: dict[str, list[bytes]] = {}
+
+
+def load_refs(refs_dir: str) -> list[bytes] | None:
+    """The two reference sheet JPEGs from REFS_DIR (outside the repo), or None if missing."""
+    if not refs_dir:
+        return None
+    if refs_dir in _refs_cache:
+        return _refs_cache[refs_dir]
+    try:
+        sheets = [(Path(refs_dir) / name).read_bytes() for name, _ in REF_SHEETS]
+    except OSError:
+        return None
+    _refs_cache[refs_dir] = sheets
+    return sheets
+
+
+def _image(jpeg: bytes) -> dict:
     b64 = base64.b64encode(jpeg).decode()
+    return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
+
+def request_body(
+    jpeg: bytes, model: str, settings: Settings, refs: list[bytes] | None = None
+) -> dict:
+    """Read A: prompt, "Photo to read:", photo. Read B adds the two reference sheets first."""
+    content: list[dict] = [{"type": "text", "text": PROMPT}]
+    if refs:
+        content.append({"type": "text", "text": REFS_INTRO})
+        for (_, caption), sheet in zip(REF_SHEETS, refs, strict=True):
+            content.append({"type": "text", "text": caption})
+            content.append(_image(sheet))
+    content.append({"type": "text", "text": PHOTO_LABEL})
+    content.append(_image(jpeg))
     body = {
         "model": model,
         "temperature": 0,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": PROMPT},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                ],
-            }
-        ],
+        "messages": [{"role": "user", "content": content}],
     }
     if settings.muse_reasoning_effort:
         body["reasoning_effort"] = settings.muse_reasoning_effort
@@ -86,12 +131,24 @@ def request_body(jpeg: bytes, model: str, settings: Settings) -> dict:
 
 
 async def read_notes(
-    client: httpx.AsyncClient, jpeg: bytes, settings: Settings, reader: str = PRIMARY
+    client: httpx.AsyncClient,
+    jpeg: bytes,
+    settings: Settings,
+    reader: str = PRIMARY,
+    with_refs: bool = False,
 ) -> list[str]:
+    refs = None
+    if with_refs:
+        refs = load_refs(settings.refs_dir)
+        if refs is None:
+            # Config error: read B without its sheets would repeat read A, so it never counts.
+            raise MuseError("reference sheets missing (REFS_DIR)")
     url, model, key = _endpoint(settings, reader)
     headers = {"Authorization": f"Bearer {key}"}
     try:
-        resp = await client.post(url, json=request_body(jpeg, model, settings), headers=headers)
+        resp = await client.post(
+            url, json=request_body(jpeg, model, settings, refs), headers=headers
+        )
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, dict) and "choices" not in data and isinstance(data.get("data"), dict):

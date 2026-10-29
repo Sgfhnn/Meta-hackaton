@@ -40,10 +40,10 @@ def _ms(start: float) -> int:
     return int((time.perf_counter() - start) * 1000)
 
 
-async def _read(client, jpeg, settings, reader: str, slot: int) -> dict:
+async def _read(client, jpeg, settings, reader: str, slot: int, with_refs: bool = False) -> dict:
     start = time.perf_counter()
     try:
-        labels = await muse.read_notes(client, jpeg, settings, reader=reader)
+        labels = await muse.read_notes(client, jpeg, settings, reader=reader, with_refs=with_refs)
     except muse.MuseError as exc:
         return {"slot": slot, "reader": reader, "ok": False, "error": str(exc), "ms": _ms(start)}
     return {"slot": slot, "reader": reader, "ok": True, "labels": labels, "ms": _ms(start)}
@@ -69,7 +69,8 @@ async def collect_reads(client, jpeg, settings: Settings, deadline: float, trace
     n = max(1, settings.muse_reads)
     started = time.perf_counter()
     tasks = {
-        asyncio.create_task(_read(client, jpeg, settings, muse.PRIMARY, i)): i for i in range(n)
+        asyncio.create_task(_read(client, jpeg, settings, muse.PRIMARY, i, with_refs=i == 1)): i
+        for i in range(n)
     }
     stage1 = max(0.0, min(settings.two_read_timeout_s, deadline - time.perf_counter()))
     done, pending = await asyncio.wait(tasks, timeout=stage1)

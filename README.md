@@ -15,7 +15,7 @@ set -a; . ./.env; set +a
 uv run uvicorn birr.api:app --reload --port 8000
 ```
 
-- `POST /scan`: multipart `image` (JPEG), `intent`, `lang`, `paid`, `price`, `attempt`. Returns a `job_id`; poll `GET /scan/{job_id}` for the result. Two Muse reads and SAM run in parallel; a total is spoken only when both reads list the same notes and SAM's count matches, and the total and change are computed in code. Run one uvicorn worker (jobs live in the process).
+- `POST /scan`: multipart `image` (JPEG), `intent`, `lang`, `paid`, `price`, `attempt`. Returns a `job_id`; poll `GET /scan/{job_id}` for the result. Two Muse reads and SAM run in parallel; a total is spoken only when both reads list the same notes and SAM's count matches, and the total and change are computed in code. Run one uvicorn worker (jobs live in the process). Read B also sends two reference sheets, `clean_sheet.jpg` and `real_sheet.jpg`, loaded from `REFS_DIR`. They are kept out of this repo because the real sheet is made from pre-event photos; without them read B fails and no scan speaks a total (`/health` shows `refs`).
 - `POST /intent`: returns 501 for now. Voice goes through Gemini on the app side.
 - `GET /health`: liveness check.
 

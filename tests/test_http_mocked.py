@@ -54,7 +54,7 @@ def test_baseten_request_shape(monkeypatch):
     assert body["temperature"] == 0
     content = body["messages"][0]["content"]
     assert content[0]["text"] == PROMPT
-    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert content[-1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_reasoning_effort_can_be_left_out(monkeypatch):
@@ -148,8 +148,11 @@ def test_sam_request_and_regions(monkeypatch):
     assert seen["body"]["prompts"] == [{"type": "text", "text": "banknote"}]
 
 
-def test_full_scan_over_mocked_http(client):
+def test_full_scan_over_mocked_http(client, tmp_path, monkeypatch):
     """End to end through the real reader and SAM clients, HTTP mocked at the transport."""
+    (tmp_path / "clean_sheet.jpg").write_bytes(b"c")
+    (tmp_path / "real_sheet.jpg").write_bytes(b"r")
+    monkeypatch.setenv("REFS_DIR", str(tmp_path))
     calls = {"muse": 0, "sam": 0}
     replies = iter(['{"notes": ["200", "100"]}', '{"notes": ["100", "200"]}'])
 

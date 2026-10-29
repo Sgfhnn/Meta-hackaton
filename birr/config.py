@@ -73,6 +73,9 @@ class Settings:
     sam_timeout_s: float = field(default_factory=lambda: float(os.getenv("SAM_TIMEOUT_S", "8")))
     # Pending team decision: when SAM is down, may a Muse-only read produce a total?
     muse_only_totals: bool = field(default_factory=lambda: _flag("MUSE_ONLY_TOTALS", False))
+    # Folder with clean_sheet.jpg and real_sheet.jpg for read B. Kept outside the repo: the real
+    # sheet is made from pre-event photos. Missing sheets make read B fail, so no total is spoken.
+    refs_dir: str = field(default_factory=lambda: os.getenv("REFS_DIR", "").strip())
     trace_dir: str = field(default_factory=lambda: os.getenv("TRACE_DIR", "traces"))
 
 

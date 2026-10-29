@@ -40,7 +40,7 @@ def fake(monkeypatch):
     """
     state = {"labels": [], "reads": None, "regions": [], "seen": {"readers": []}}
 
-    async def fake_muse(client, jpeg, settings, reader="baseten"):
+    async def fake_muse(client, jpeg, settings, reader="baseten", with_refs=False):
         state["seen"]["muse_jpeg"] = jpeg
         state["seen"]["readers"].append(reader)
         item = state["labels"] if state["reads"] is None else state["reads"].pop(0)

@@ -20,6 +20,7 @@ from birr.agent.trace import new_trace_id, write_trace
 from birr.config import get_settings
 from birr.image import BadImage, prepare_jpeg
 from birr.jobs import JobStore
+from birr.read import muse
 from birr.scan import ScanRequest
 from birr.voice import speech as say
 
@@ -152,4 +153,5 @@ async def intent_stub(lang: Annotated[str, Form()] = "en"):
 
 @app.get("/health")
 async def health():
-    return {"ok": True}
+    # refs: read B's reference sheets are loaded; without them no scan can speak a total.
+    return {"ok": True, "refs": muse.load_refs(get_settings().refs_dir) is not None}
