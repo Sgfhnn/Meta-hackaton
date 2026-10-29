@@ -48,6 +48,9 @@ class Settings:
     # SAM_ADVISORY=1: when both reads agree (same notes, none unclear) the total is spoken and
     # SAM's count is only logged. Off = the live rule, where SAM's count must match.
     sam_advisory: bool = field(default_factory=lambda: _flag("SAM_ADVISORY", False))
+    # SAM_OFF=1: never call SAM. Pair with MUSE_ONLY_TOTALS=1 so two agreeing reads speak;
+    # disagreement then always ends as rescan (no "move this note" hint).
+    sam_off: bool = field(default_factory=lambda: _flag("SAM_OFF", False))
     max_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     )

@@ -33,3 +33,26 @@ def test_filter_thresholds_configurable():
     assert len(kept) == 1
     kept, _ = filter_regions([R, low], min_score=0.5, min_area=0.005)
     assert len(kept) == 2
+
+
+def test_sam_off_skips_call(monkeypatch):
+    import asyncio
+
+    from birr import scan
+    from birr.config import Settings
+
+    monkeypatch.setenv("SAM_OFF", "1")
+    called = []
+
+    async def boom(*a, **k):
+        called.append(1)
+
+    monkeypatch.setattr(scan.sam, "segment", boom)
+    out = asyncio.run(scan._sam(None, b"", 1, 1, Settings()))
+    assert out["ok"] is False and out["error"] == "disabled" and not called
+
+
+def test_sam_off_with_muse_only_totals_speaks_agreement():
+    out = decide([["50", "10"], ["10", "50"]], None, intent="count", paid=None, price=None,
+                 attempt=1, max_attempts=3, muse_only_totals=True, sam_advisory=True)  # fmt: skip
+    assert out["total"] == 60

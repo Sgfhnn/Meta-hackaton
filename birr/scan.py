@@ -51,6 +51,8 @@ async def _read(client, jpeg, settings, reader: str, slot: int, with_refs: bool 
 
 async def _sam(client, jpeg, width, height, settings) -> dict:
     start = time.perf_counter()
+    if settings.sam_off:
+        return {"ok": False, "error": "disabled", "ms": 0}
     try:
         regions = await sam.segment(client, jpeg, width, height, settings)
     except (TimeoutError, sam.SamError) as exc:
