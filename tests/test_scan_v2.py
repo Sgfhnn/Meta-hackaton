@@ -237,3 +237,21 @@ def test_bad_request_is_still_synchronous(client, fake):
     r = start_job(client, intent="change", paid="500")
     assert r.status_code == 400
     assert r.json()["error"] == "bad_request"
+
+
+def test_cors_env_origin(monkeypatch):
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("CORS_ORIGINS", "https://preview.example")
+    import birr.api as api
+
+    api = importlib.reload(api)
+    r = TestClient(api.app).options(
+        "/scan",
+        headers={"Origin": "https://preview.example", "Access-Control-Request-Method": "POST"},
+    )
+    assert r.headers.get("access-control-allow-origin") == "https://preview.example"
+    monkeypatch.delenv("CORS_ORIGINS")
+    importlib.reload(api)

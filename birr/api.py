@@ -5,12 +5,14 @@ Run: uv run uvicorn birr.api:app --reload
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 import httpx
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from birr import scan as scan_flow
@@ -34,6 +36,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Birr backend", lifespan=lifespan)
+
+_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
 
 
 def _error(status: int, error: str, text: str, lang: str = "en", trace_id: str | None = None):
