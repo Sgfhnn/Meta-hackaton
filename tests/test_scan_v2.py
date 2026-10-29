@@ -91,8 +91,8 @@ def test_slow_second_read_uses_the_finished_one(client, fake, monkeypatch):
     start = time.perf_counter()
     body = post_scan(client).json()
     assert time.perf_counter() - start < 2
-    assert body["outcome"] == "total"
-    assert body["total"] == 150
+    assert body["outcome"] == "rescan"  # a single read never speaks a total
+    assert body["total"] is None
     trace = trace_of(client, body)
     assert trace["mode"] == "single_read"
     assert trace["retry"] == {"reason": "slow", "used": "finished_read"}
@@ -119,7 +119,7 @@ def test_one_read_fails_other_counts_as_single_read(client, fake):
     fake["reads"] = [MuseError("bad json"), ["200", "100"]]
     fake["regions"] = FOUR[:2]
     body = post_scan(client).json()
-    assert body["outcome"] == "total"
+    assert body["outcome"] == "rescan"
     trace = trace_of(client, body)
     assert trace["mode"] == "single_read"
     assert trace["retry"]["reason"] == "read_failed"
@@ -130,8 +130,8 @@ def test_both_reads_slow_starts_one_new_read(client, fake, monkeypatch):
     fake["reads"] = [("slow", 5, ["50"]), ("slow", 5, ["50"]), ["200"]]
     fake["regions"] = FOUR[:1]
     body = post_scan(client).json()
-    assert body["outcome"] == "total"
-    assert body["total"] == 200
+    assert body["outcome"] == "rescan"
+    assert body["total"] is None
     assert fake["seen"]["readers"] == ["baseten", "baseten", "baseten"]
     assert trace_of(client, body)["retry"]["used"] == "new_read:baseten"
 
@@ -142,7 +142,7 @@ def test_fallback_reader_takes_the_retry_when_enabled(client, fake, monkeypatch)
     fake["reads"] = [("slow", 5, ["50"]), ("slow", 5, ["50"]), ["200"]]
     fake["regions"] = FOUR[:1]
     body = post_scan(client).json()
-    assert body["total"] == 200
+    assert body["total"] is None
     assert fake["seen"]["readers"] == ["baseten", "baseten", "cline"]
 
 

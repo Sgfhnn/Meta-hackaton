@@ -3,8 +3,8 @@
 Rules (docs/api.md):
 - Two reads (normal path): a total needs both reads to list the same notes (same multiset of
   valid denominations) AND SAM's filtered count to equal that note count.
-- One read (the retry after a slow two-read stage): a total needs every note valid AND SAM's
-  count to match. Without SAM a single read never gives a total.
+- One read (the retry after a slow or failed two-read stage): never gives a total. It ends as
+  guide when SAM's count differs, else rescan (single read + SAM spoke wrong totals in tests).
 - SAM unavailable: a Muse-only total is allowed only if MUSE_ONLY_TOTALS is on and two reads
   agree; otherwise rescan, never guide.
 """
@@ -96,16 +96,16 @@ def decide(
     same_count = len({len(r) for r in reads}) == 1
     sam_ok = regions is not None
 
+    two_reads = len(reads) >= 2
     if sam_ok:
         counts_match = len(regions) == len(labels)
-        if counts_match and agreed:
+        if counts_match and agreed and two_reads:
             outcome = "total"
         elif same_count and not counts_match and regions:
             outcome = "guide"
         else:
             outcome = "rescan"
     else:
-        two_reads = len(reads) >= 2
         outcome = "total" if (muse_only_totals and two_reads and agreed) else "rescan"
 
     result = {"outcome": outcome, "total": None, "change": None, "notes": notes, "hint": None}

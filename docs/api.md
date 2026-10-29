@@ -9,7 +9,7 @@ Scope: birr notes of 5, 10, 50, 100 and 200 (the denominations in the gate label
 ## Core rules
 
 1. **The backend computes totals and change in code**, from the per-note reads. The model never states a total.
-2. **A total is only spoken when we're sure.** That means: two independent Muse reads of the photo list the same notes (the same multiset of denominations, order ignored), SAM's note count equals that note count, no note is `partial` or `unclear`, and every denomination is in scope. Otherwise the outcome is `guide` or `rescan`, and `total` is `null`. The one exception to "two reads" is the slow-scan retry in §2.1, which uses a single read and still needs SAM's count to match.
+2. **A total is only spoken when we're sure.** That means: two independent Muse reads of the photo list the same notes (the same multiset of denominations, order ignored), SAM's note count equals that note count, no note is `partial` or `unclear`, and every denomination is in scope. Otherwise the outcome is `guide` or `rescan`, and `total` is `null`. There is no exception: the slow-scan retry in §2.1 uses a single read and never speaks a total.
 3. **No images are stored.** The backend keeps only the trace (§4). The app strips EXIF metadata, including GPS location, before uploading.
 
 ## 1. `POST /intent`: what the user asked
@@ -76,7 +76,7 @@ An unknown or expired `job_id` (finished jobs are kept `JOB_TTL_S`, default 10 m
 
 1. SAM and two Muse reads (`MUSE_READS=2`, `reasoning_effort` low) start in parallel on the same resized photo.
 2. **Two-read path.** If both reads are back within `TWO_READ_TIMEOUT_S` (default 40 s), the decision uses both: a total needs the two reads to list the same notes **and** SAM's count to match.
-3. **Single-read retry.** If a read is slow or fails, the scan retries once with a single read: it uses a read that already came back, or else starts one more read (on the fallback reader when `MUSE_FALLBACK=cline`) and takes the first read that finishes. A single read gives a total only when every note is valid **and** SAM's count matches; never when SAM is unavailable.
+3. **Single-read retry.** If a read is slow or fails, the scan retries once with a single read: it uses a read that already came back, or else starts one more read (on the fallback reader when `MUSE_FALLBACK=cline`) and takes the first read that finishes. A single read **never** gives a total (single read + SAM spoke wrong totals in Claude's Oct 29 tests). It ends as `guide` when SAM's count differs, else `rescan`.
 4. **Hard limit.** The whole scan stops at `SCAN_DEADLINE_S` (default 60 s). If no read is back by then, the job finishes as `done` with `outcome: "rescan"` and a "that took too long" prompt, not an error, so the app's rescan loop carries on. SAM not back by then counts as SAM unavailable.
 
 **Scan result** (`result` of a `done` job, or the direct response with `wait=true`)

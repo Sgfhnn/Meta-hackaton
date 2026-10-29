@@ -82,7 +82,7 @@ def test_cline_fallback_request_and_wrapped_reply(monkeypatch):
     assert call_reader(handler, reader=muse.FALLBACK) == ["200"]
     assert seen["url"] == "https://api.cline.bot/api/v1/chat/completions"
     assert seen["auth"] == "Bearer cline-key"
-    assert seen["model"] == "meta/muse-spark-1.3-contributor"
+    assert seen["model"] == "meta/muse-spark-1.3"
 
 
 @pytest.mark.parametrize(

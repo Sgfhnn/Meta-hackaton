@@ -58,7 +58,7 @@ class Settings:
         )
     )
     cline_model: str = field(
-        default_factory=lambda: os.getenv("CLINE_MODEL", "meta/muse-spark-1.3-contributor")
+        default_factory=lambda: os.getenv("CLINE_MODEL", "meta/muse-spark-1.3")
     )
     cline_key: str = field(default_factory=lambda: os.getenv("CLINE_API_KEY", ""))
     # Hard limit for one scan job, everything included.
