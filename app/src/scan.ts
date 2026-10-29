@@ -9,20 +9,25 @@ import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 
 import { mockScan } from './mock';
+import { UPLOAD_MAX_SIDE } from './pictureSize';
 import type { JobStarted, JobStatus, ScanError, ScanRequest, ScanResponse } from './types';
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/+$/, '');
 
 export const usingMock = API_URL === '' || API_URL === 'mock';
 
-const MAX_SIDE = 1280; // the backend resizes again (IMAGE_MAX_PX); this just keeps uploads small
 const DEFAULT_POLL_MS = 1500;
 
-/** Resize and re-encode as JPEG. Re-encoding drops EXIF (including GPS), as the contract requires. */
+/**
+ * Cap the long side at 2048 px (never upscale) and re-encode as JPEG. The backend reads notes at
+ * 2048 px and shrinks its own copy for SAM. Re-encoding drops EXIF (including GPS), as the contract requires.
+ */
 export async function preparePhoto(uri: string, width: number, height: number): Promise<string> {
   const ctx = ImageManipulator.manipulate(uri);
-  if (Math.max(width, height) > MAX_SIDE) {
-    ctx.resize(width >= height ? { width: MAX_SIDE, height: null } : { width: null, height: MAX_SIDE });
+  if (Math.max(width, height) > UPLOAD_MAX_SIDE) {
+    ctx.resize(
+      width >= height ? { width: UPLOAD_MAX_SIDE, height: null } : { width: null, height: UPLOAD_MAX_SIDE },
+    );
   }
   const image = await ctx.renderAsync();
   const result = await image.saveAsync({ format: SaveFormat.JPEG, compress: 0.85 });

@@ -7,6 +7,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { choosePictureSize } from './src/pictureSize';
 import { preparePhoto, scan, usingMock, type ScanOutcome } from './src/scan';
 import type { Lang } from './src/types';
 import { loadVoices, pickSpeech, PROMPTS, say, sayQueued } from './src/voice';
@@ -22,6 +23,8 @@ export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const camera = useRef<CameraView>(null);
   const attempt = useRef(1);
+  const welcomed = useRef(false);
+  const [pictureSize, setPictureSize] = useState<string | undefined>();
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('Tap anywhere to count your money.');
@@ -81,7 +84,7 @@ export default function App() {
       if (ticks === STILL_COUNTING_AT_TICK) sayQueued(PROMPTS.stillCounting);
     }, TICK_MS);
     try {
-      const photo = await camera.current.takePictureAsync({ quality: 0.8 });
+      const photo = await camera.current.takePictureAsync({ quality: 0.9 });
       const jpeg = await preparePhoto(photo.uri, photo.width, photo.height);
       const req = { lang, attempt: attempt.current, maxAttempts: MAX_ATTEMPTS };
       const result = await scan(jpeg, req, SCAN_TIMEOUT_MS);
@@ -94,6 +97,23 @@ export default function App() {
     } finally {
       clearInterval(ticker);
       setBusy(false);
+    }
+  }
+
+  // Ask the camera for at least 2048 px photos once it is up. Changing the size restarts the
+  // preview, so onCameraReady fires again: pick only once, and welcome the user only once.
+  async function onCameraReady() {
+    setReady(true);
+    if (pictureSize === undefined && camera.current) {
+      try {
+        setPictureSize(choosePictureSize(await camera.current.getAvailablePictureSizesAsync()) ?? '');
+      } catch {
+        setPictureSize(''); // not supported here (e.g. web): keep the camera default
+      }
+    }
+    if (!welcomed.current) {
+      welcomed.current = true;
+      say(message);
     }
   }
 
@@ -129,10 +149,8 @@ export default function App() {
         ref={camera}
         style={StyleSheet.absoluteFill}
         facing="back"
-        onCameraReady={() => {
-          setReady(true);
-          say(message);
-        }}
+        pictureSize={pictureSize || undefined}
+        onCameraReady={onCameraReady}
         onMountError={() => announce('The camera could not start. Please close the app and open it again.')}
       />
       <Pressable
