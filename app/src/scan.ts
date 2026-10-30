@@ -12,7 +12,7 @@ import { mockScan } from './mock';
 import { UPLOAD_MAX_SIDE } from './pictureSize';
 import type { JobStarted, JobStatus, ScanError, ScanRequest, ScanResponse } from './types';
 
-const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/+$/, '');
+export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/+$/, '');
 
 export const usingMock = API_URL === '' || API_URL === 'mock';
 
@@ -41,12 +41,17 @@ export type ScanOutcome =
   | { kind: 'network' };
 
 function formFields(req: ScanRequest): Record<string, string> {
-  return {
-    intent: 'count',
+  const fields: Record<string, string> = {
+    intent: req.intent,
     lang: req.lang,
     attempt: String(req.attempt),
     max_attempts: String(req.maxAttempts),
   };
+  if (req.intent === 'change' && req.paid != null && req.price != null) {
+    fields.paid = String(req.paid);
+    fields.price = String(req.price);
+  }
+  return fields;
 }
 
 async function upload(photoUri: string, req: ScanRequest, signal: AbortSignal) {
@@ -105,7 +110,8 @@ export async function scan(photoUri: string, req: ScanRequest, timeoutMs: number
       if (res.status !== 200) return { kind: 'error', body: status };
       if (status.status === 'done' && status.result) return { kind: 'ok', body: status.result };
       if (status.status === 'error') {
-        return { kind: 'error', body: { error: status.error ?? 'error', speech: status.speech ?? {} } };
+        const { speech = {}, speech_audio, speech_todo } = status;
+        return { kind: 'error', body: { error: status.error ?? 'error', speech, speech_audio, speech_todo } };
       }
       wait = status.poll_after_ms ?? DEFAULT_POLL_MS;
     }
