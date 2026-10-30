@@ -48,7 +48,7 @@ After merging #15:
 3. **Phone.** Try hold-to-talk, Ask with TalkBack on, the change check, and the offline prompt (airplane mode should play the Amharic "cannot reach the server" clip).
 4. **Oromo.** A native speaker decides whether Gemini's Oromo voice is acceptable. If it is, set `GEMINI_TTS_LANGS=am,om`.
 5. **Prompt v3.1 (#14).** Get its coverage numbers on the locked 20 before it goes live.
-6. **SAM, if the team still wants to test it** (as Muse proposed): use `SAM_PROVIDER=roboflow` with `SAM_ADVISORY=1`, so SAM's count is logged without blocking a total. Or deploy Modal and compare on the dev set with `tools/experiments/run_sam.py`; it follows `SAM_PROVIDER` and `SAM_MODAL_*`.
+6. **SAM, if the team still wants to test it** (as Muse proposed): use `SAM_PROVIDER=roboflow` with `SAM_ADVISORY=1`, so SAM's count is logged without blocking a total. Or deploy Modal and compare on the dev set with `tools/experiments/run_sam.py`; it follows `SAM_PROVIDER` and `SAM_MODAL_*`. If the one-frame SAM 3.1 route returns too few boxes, add your Kaggle route as a third `SAM_MODEL` in `modal_sam/app.py`: `build_sam3_image_model` loaded with the `sam3.1_multiplex.pt` checkpoint, with bf16 autocast. On a T4 it boxed 8/8 clean notes at 0.97–0.98.
 
 ## 5. Not verified yet
 
