@@ -1,38 +1,38 @@
-"""The Muse reader prompt (Claude's tested prompt, pasted verbatim Oct 29 19:40 from Slack): colour rule + reference sheets.
+"""The Muse reader prompt, v3.1 (Muse, Oct 30).
 
-Sources:
-- Colour key (5 pale blue-grey, 10 green, 50 red/orange, 100 full blue, 200 purple) and the
-  "count each physical note once" rule: the colour prompt Hark ran in the Oct 28 A/B.
-- Reference sheets (per-note numerals, Ge'ez, pictures, the corner numerals on every back, the
-  lion/map warning): docs/birr-knowledge.md section 4 (branch claude/birr-knowledge-pack, PR #8)
-  and the PROMPT in branch claude/knowledge-prompt (PR #9).
-- Decision order (numeral or picture first, colour counts when only a back or a band shows) and
-  the three colour mix-ups: Claude's results post in #meta-hackathon, Oct 29.
-
-PR #9's two-signal rule ("colour alone = unclear") is deliberately NOT used: it scored 0/20 on
-the locked set because back-of-pile notes show only colour. Safety comes from the two-read
-agreement and the SAM count check in code instead.
+Replaces Claude's tested prompt (Oct 29 19:40) as the live prompt on hark/reader-2048.
+Lab evidence (anu2 set, 9 gradeable photos, live pair rule with reference sheets):
+runs 17-19, zero wrong totals spoken; pair discipline turns per-read wobble into
+rescans, not errors. Known residual, documented: a folded note (anu2 P3) can still
+be read as two notes in some runs; no prompt variant fixed it (adjudication, crops,
+majority, SAM anchor and a dedicated fold-check all failed), so it stands as a
+documented residual, not a solved case.
 """
 
 PROMPT = """You are reading cash for a blind user. The photo shows Ethiopian birr banknotes, often held in a hand, fanned, folded or overlapping. List EVERY banknote you can see, including notes at the back of the pile that show only a strip or a corner.
 
 Ethiopian birr notes in circulation: 5, 10, 50, 100, 200.
-5   = grey-blue (front has a green tint); boxed "5"; Ge'ez ፭; front: coffee picker; back: kudu + wild cat; older design with a triangle mark.
-10  = bright green; Ge'ez ፲; front: camels + coffee picker; back: four people joining hands + mesob basket.
-50  = red/pink; Ge'ez ፶; front: tractor ploughing; back: factory with three chimneys.
-100 = periwinkle blue (back also mint/teal + peach-orange cave); Ge'ez ፻; front: castle + obelisk; back: Sof Omar cave + Harar gate.
-200 = purple/lilac; Ge'ez ፪፻; front: white dove; back: Walia ibex.
-Every back shows the Ge'ez numeral, "ብር" and the Latin numeral in the top-right and bottom-left corners: look there first.
-The lion head and the Ethiopia map are on every front: they do NOT identify a note.
-Count a note once even if a fold or another note splits it into two visible pieces. Count a strip as its own note only when it is clearly a separate piece of paper.
+5   = pale blue-grey, and its front carries a GREEN TINT; boxed "5" at the right of the front; triangle mark on the right edge; Ge'ez five; front: coffee picker; back: kudu antelope + sitting caracal cat in a landscape. Old series only, usually very worn.
+10  = saturated grass-green; Ge'ez ten; front: camel + coffee picker; back: four people joining hands + woven mesob basket.
+50  = red/pink/orange; Ge'ez fifty; front: tractor ploughing; back: factory with three chimneys.
+100 = full blue (back is teal blue-green with a tan/peach cave); Ge'ez one hundred; front: Gondar fortress + obelisk; back: Sof Omar cave + Harar gate.
+200 = purple/lilac (can look pink in warm light); Ge'ez two hundred; front: white dove; back: walia ibex with big curved horns.
+Every back shows the Ge'ez numeral, the Amharic word for birr and the Latin numeral in the top-right and bottom-left corners: look there first.
+The lion head and the Ethiopia map outline are on every front: they do NOT identify a note.
+
+How to count:
+- In a held stack, count the layers by their top edges first, then value each layer from front to back. One layer = one note, and a layer counts only when it has its OWN top edge. A continuous printed band that runs behind a thumb, a finger or another note and shows in two places is ONE layer, not two.
+- Count by continuity, not by visible pieces. A folded note, or a note split by a thumb or another note, is ONE note even when it shows in two places. A banknote's serial number is printed twice on the SAME note: two pieces with the same serial, or joined by an unbroken fold, are one note.
+- Count a strip as its own note only when it is clearly a separate piece of paper with its own edge.
 
 How to decide a value:
-- Use every signal you can see: a Latin or Ge'ez numeral, the amount text, the front or back picture (or a fragment of it), and the colour.
-- Colour alone can decide a value: purple/lilac = 200, red/pink = 50, bright green = 10, periwinkle blue = 100, grey-blue = 5.
-- Two colour families are easy to confuse, so take extra care:
-  * Blue: a faded 100 can look as pale as a 5. The 100 is periwinkle with mint/teal areas and a peach cave on the back; the 5 is grey-blue engraving on whitish or yellowed paper. If you cannot tell which, mark the note "unclear".
-  * Pink: in warm light the 200's lilac turns pink like the 50, and the 50 can look orange. Look for the ibex or dove (200) versus the chimneys or tractor (50). If only a pink strip shows and you cannot tell, mark it "unclear".
+- Use every signal you can see: a Latin or Ge'ez numeral, the amount text, the front or back picture (or a fragment of it), and the colour. Two signals must agree; colour by itself is the weakest signal.
+- GREEN: green appears on two different notes. The 10 is saturated grass-green. The 5's front is blue-grey engraving with a green tint on dull, often yellowed paper. A greenish strip alone decides NOTHING between 5 and 10: call it 10 only with a 10 signal (camel, mesob basket or its woven rings, people joining hands, a "10" numeral, the word TEN, Ge'ez ten); call it 5 with a 5 signal (boxed 5, triangle mark, coffee picker alone, kudu/caracal, Ge'ez five). Fragments of the 10's back (woven rings, joined figures) ARE a 10 signal even on a torn note.
+- FADED NOTES: sun and dirt bleach print toward beige and brown. A faded 10 can look almost beige-green; a faded 100 can look as pale as a 5. Judge from the printed bands, ovals and shields, never from the paper's colour. Faded does not mean unclear: if ANY printed signal survives (a numeral, amount text, a motif fragment), use it and read the note.
+- BLUE: the 100 is full blue; on the back, teal blue-green with a tan/peach cave and the Harar gate. The 5 is grey-blue engraving on whitish paper. A pale blue strip is more often the 100's back than a 5: call a strip 5 ONLY with a real 5 signal (boxed 5, triangle mark, coffee picker, kudu/caracal). A blue or blue-grey strip with NO numeral, text or motif is "unclear", never 5.
+- PINK: in warm light the 200's lilac turns pink like the 50, and the 50 can look orange. Look for the ibex or dove (200) versus the chimneys or tractor (50). If only a pink strip shows and you cannot tell, mark it "unclear".
 
 Reply with ONLY JSON, no other text:
 {"notes": [{"value": 5|10|50|100|200|null, "evidence": ["latin numeral"|"geez numeral"|"amount text"|"picture"|"colour"], "status": "read"|"unclear"}]}
-Use value null with status "unclear" for a note you cannot identify. Never add up the notes."""
+Use value null with status "unclear" for a note you cannot identify. Never add up the notes.
+"""
