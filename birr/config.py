@@ -109,6 +109,47 @@ class Settings:
     # sheet is made from pre-event photos. Missing sheets make read B fail, so no total is spoken.
     refs_dir: str = field(default_factory=lambda: os.getenv("REFS_DIR", "").strip())
     trace_dir: str = field(default_factory=lambda: os.getenv("TRACE_DIR", "traces"))
+    # Voice (docs/api.md section 1): Gemini hears the question, translates the answer the backend
+    # wrote into Amharic or Oromo, and speaks it. Without GEMINI_API_KEY answers stay in English.
+    gemini_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
+    gemini_base_url: str = field(
+        default_factory=lambda: os.getenv(
+            "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
+        ).rstrip("/")
+    )
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-flash"))
+    # Optional thinkingConfig.thinkingLevel for the model above. Empty leaves it out.
+    gemini_thinking_level: str = field(
+        default_factory=lambda: os.getenv("GEMINI_THINKING_LEVEL", "").strip()
+    )
+    gemini_tts_model: str = field(
+        default_factory=lambda: os.getenv("GEMINI_TTS_MODEL", "gemini-3.8-flash-tts")
+    )
+    gemini_voice: str = field(default_factory=lambda: os.getenv("GEMINI_VOICE", "Kore"))
+    gemini_voice_style: str = field(
+        default_factory=lambda: os.getenv("GEMINI_VOICE_STYLE", "calm, clear and a little slow")
+    )
+    # Languages Gemini speaks aloud. Its TTS list has Amharic but not Oromo, so Oromo stays text
+    # (the app speaks English) until a native speaker checks it: GEMINI_TTS_LANGS=am,om.
+    gemini_tts_langs: frozenset[str] = field(
+        default_factory=lambda: frozenset(
+            x.strip() for x in os.getenv("GEMINI_TTS_LANGS", "am").split(",") if x.strip()
+        )
+    )
+    gemini_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("GEMINI_TIMEOUT_S", "15"))
+    )
+    # Translation runs inside the scan job. Past this, the answer stays in English.
+    translate_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("TRANSLATE_TIMEOUT_S", "8"))
+    )
+    max_audio_bytes: int = field(
+        default_factory=lambda: int(os.getenv("MAX_AUDIO_BYTES", str(3 * 1024 * 1024)))
+    )
+    # Translations and speech clips. Holds backend phrases and totals only, never user audio.
+    voice_cache_dir: str = field(
+        default_factory=lambda: os.getenv("VOICE_CACHE_DIR", "voice_cache")
+    )
 
 
 def get_settings() -> Settings:

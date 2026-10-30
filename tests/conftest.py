@@ -25,7 +25,9 @@ def boxes(*specs):
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("TRACE_DIR", str(tmp_path))
+    monkeypatch.setenv("VOICE_CACHE_DIR", str(tmp_path / "voice"))
     monkeypatch.delenv("MUSE_ONLY_TOTALS", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)  # voice stays English unless a test sets it
     with TestClient(api.app) as c:
         c.trace_dir = tmp_path
         yield c

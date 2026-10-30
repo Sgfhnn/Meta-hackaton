@@ -189,9 +189,10 @@ def test_trace_written_without_image(client, fake):
     assert "base64" not in path.read_text() and "jpeg" not in json.dumps(trace).lower()
 
 
-def test_intent_stub_is_501(client):
+def test_intent_needs_audio(client):
+    # The spoken question is required; without Gemini an upload gets 501 (tests/test_voice.py).
     r = client.post("/intent", data={"lang": "en"})
-    assert r.status_code == 501
+    assert r.status_code == 400
     assert r.json()["speech"]["en"]
 
 

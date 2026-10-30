@@ -1,7 +1,8 @@
-"""Spoken text, built in code. English only for now.
+"""Spoken text, built in code, in English.
 
-Amharic and Oromo are produced by Gemini (translation + TTS) on the app side per the team plan,
-so for lang "am" or "om" the backend returns the same English text and flags it in `speech_todo`.
+Amharic and Oromo come from birr/voice/service.py: Gemini translates these English phrases (numbers
+checked) and speaks them. Until a phrase has a checked translation, lang "am" or "om" gets the
+English text, flagged in `speech_todo`.
 """
 
 from __future__ import annotations
@@ -68,6 +69,47 @@ STILL_COUNTING = "Still counting."
 BAD_REQUEST = "Sorry, I couldn't use that photo. Please take it again."
 NEED_PRICE = "Tell me how much you paid and the price, then scan your change."
 VOICE_TODO = "Voice questions are not ready yet. Tap scan to count your notes."
+COUNT_PROMPT = "Spread your notes and hold the phone over them."
+INTENT_UNKNOWN = (
+    "Sorry, I did not understand. Ask how much money you have, "
+    "or say what you paid and the price to check your change."
+)
+PRICE_OVER_PAID = (
+    "The price you said is more than you paid. Tell me again how much you paid and the price."
+)
+BAD_AUDIO = "Sorry, I couldn't use that recording. Please ask again."
+NOT_HEARD = "Sorry, I couldn't hear that. Please try again."
+
+
+def change_prompt(paid: int, price: int) -> str:
+    head = f"You paid {paid} birr for {price} birr."
+    if paid == price:
+        return f"{head} You get no change."
+    change = f"Your change should be {paid - price} birr."
+    return f"{head} {change} Spread it out and hold the phone over it."
+
+
+# Every fixed backend phrase, translated ahead of time when Gemini is configured.
+FIXED = [
+    RESCAN, NO_NOTES, GIVE_UP, TRY_AGAIN, TOO_SLOW, SLOW_RESCAN, STILL_COUNTING, BAD_REQUEST,
+    NEED_PRICE, VOICE_TODO, COUNT_PROMPT, INTENT_UNKNOWN, PRICE_OVER_PAID, BAD_AUDIO, NOT_HEARD,
+]  # fmt: skip
+
+# The app's own prompts (app/src/voice.ts PROMPTS, same keys and English). GET /phrases returns
+# them translated, with audio, so the app can speak them even when the network is down later.
+APP_PHRASES = {
+    "counting": "Counting.",
+    "stillCounting": "Still counting.",
+    "failed": "Sorry, I could not count that. Please tap to try again.",
+    "noNetwork": "I cannot reach the server. Check the internet connection and tap to try again.",
+    "giveUp": "I cannot count these notes. Please spread them out flat and start again.",
+    "busy": "Still counting, please wait.",
+    "cameraNeeded": "This app needs the camera to count your money. Tap the screen to allow it.",
+    "listening": "Listening.",
+    "tooShort": "Hold the screen while you speak, then let go.",
+    "micNeeded": "To ask by voice, allow the microphone. You can still tap to count.",
+    "heardFailed": "Sorry, I couldn't hear that. Please try again.",
+}
 
 
 def speech(en: str, lang: str) -> tuple[dict, str | None]:
