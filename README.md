@@ -20,3 +20,7 @@ uv run uvicorn birr.api:app --reload --port 8000
 - `GET /health`: liveness check.
 
 Each call writes one JSON trace to `TRACE_DIR` (no image bytes). Tests mock Muse and SAM, so they need no keys or network: `uv run pytest`.
+
+## App
+
+Expo (React Native) app in `app/`, Android first: tap anywhere, the phone photographs the notes, and the answer from `/scan` is spoken. See `app/README.md` to run it on a phone with Expo Go, including a demo mode that needs no backend.
