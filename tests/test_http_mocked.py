@@ -114,16 +114,33 @@ def test_per_note_objects_are_accepted():
 
 
 def test_prompt_has_colour_rule_and_reference_sheets():
+    # Pins the v3.1 live prompt wording (birr/read/prompt.py). v3.1 dropped
+    # the old one-line colour table and reversed the old colour rule: colour
+    # alone now decides nothing, two signals must agree.
     for fact in (
-        "purple/lilac = 200, red/pink = 50, bright green = 10, periwinkle blue = 100",
-        "፪፻",
-        "Walia ibex",
+        # Denomination colour lines, v3.1 format.
+        "200 = purple/lilac",
+        "50  = red/pink/orange",
+        "10  = saturated grass-green",
+        "100 = full blue",
+        "5   = pale blue-grey",
+        # Motifs, v3.1 wording (lowercase walia ibex, singular camel).
+        "walia ibex",
         "Harar gate",
         "three chimneys",
-        "camels",
-        "Colour alone can decide a value",
-        "Count a note once",
-        "Never add up the notes",
+        "camel + coffee picker",
+        "kudu antelope",
+        "boxed 5",
+        # Ge'ez values are spelled out in words in v3.1, not glyphs.
+        "Ge'ez two hundred",
+        # Colour rule: two signals must agree; colour alone is weakest.
+        "Two signals must agree; colour by itself is the weakest signal",
+        "A greenish strip alone decides NOTHING between 5 and 10",
+        # Counting rules: one layer = one note, even when split in two places.
+        "One layer = one note",
+        "is ONE note even when it shows in two places",
+        # Totals are computed in code, never by the model.
+        "Never add up the notes.",
     ):
         assert fact in PROMPT
 
