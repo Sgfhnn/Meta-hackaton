@@ -35,6 +35,7 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # modal_sam/ is not part of the birr package
 
 [tool.ruff.lint.per-file-ignores]
 "birr/read/prompt.py" = ["E501"]  # the reader prompt lines
