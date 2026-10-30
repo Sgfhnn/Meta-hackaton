@@ -1,6 +1,6 @@
 // Record a short spoken question with the microphone (expo-audio). Two ways in:
-// hold the screen and let go (start + stop), or the Ask button (toggle, which TalkBack users can
-// reach). Recording also stops by itself after MAX_MS.
+// hold the screen and let go (start + stop), or the Ask button, tapped twice (which TalkBack
+// users can reach). Recording also stops by itself after MAX_MS.
 
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
 import { useEffect, useRef, useState } from 'react';
@@ -60,7 +60,11 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
       return;
     }
     // The first time, the permission dialog takes the press: the user lets go to answer it.
-    if (!wanted.current) return;
+    // Say how to ask ("hold the screen while you speak").
+    if (!wanted.current) {
+      done.current({ kind: 'short' });
+      return;
+    }
     try {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
@@ -76,10 +80,5 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
     autoStop.current = setTimeout(() => void stop(), MAX_MS);
   }
 
-  return {
-    listening,
-    start,
-    stop,
-    toggle: () => (active.current || wanted.current ? stop() : start()),
-  };
+  return { listening, start, stop };
 }
