@@ -4,36 +4,55 @@ This is the contract between the Expo app and the backend. Both sides build agai
 
 Scope: birr notes of 5, 10, 50, 100 and 200 (the denominations in the gate labels). Any other note comes back as `unclear`.
 
-**Who does what:** Muse Spark Open reads every note. Gemini only transcribes the user's speech and speaks the answers (Amharic, Oromo, English); it never reads notes or computes totals. SAM finds and locates notes: the live app uses Roboflow's hosted SAM 3, while the gate runs SAM 3.1 on Kaggle. They are not identical, so hint positions proven on one must be re-checked on the other.
+**Who does what:** Muse Spark Open reads every note. Gemini only hears the user's question, translates the answers the backend wrote, and speaks them (Amharic, Oromo, English); it never reads notes or computes totals. SAM finds and locates notes. `SAM_PROVIDER` picks Roboflow's hosted SAM 3 (`roboflow`, the default), our SAM 3.1 endpoint on Modal (`modal`, see `modal_sam/README.md`), or no SAM (`off`, which `SAM_OFF=1` also sets). They are not identical, so hint positions proven on one must be re-checked on the other. `GET /health` reports the provider in use.
 
 ## Core rules
 
 1. **The backend computes totals and change in code**, from the per-note reads. The model never states a total.
 2. **A total is only spoken when we're sure.** That means: two independent Muse reads of the photo list the same notes (the same multiset of denominations, order ignored), SAM's note count equals that note count, no note is `partial` or `unclear`, and every denomination is in scope. Otherwise the outcome is `guide` or `rescan`, and `total` is `null`. There is no exception: the slow-scan retry in §2.1 uses a single read and never speaks a total.
-3. **No images are stored.** The backend keeps only the trace (§4). The app strips EXIF metadata, including GPS location, before uploading.
+3. **No images or recordings are stored.** The backend keeps only the trace (§4). The app strips EXIF metadata, including GPS location, before uploading. Voice questions go to Gemini to be understood, and neither the audio nor the transcript is kept.
 
 ## 1. `POST /intent`: what the user asked
 
-The user taps and speaks. Gemini transcribes the audio and extracts the intent.
+The user holds the screen (or taps Ask) and speaks. Gemini hears the question and extracts the intent. Neither the audio nor the transcript is stored.
 
 **Request:** `multipart/form-data`
 | Field | Type | Notes |
 |---|---|---|
-| `audio` | file | m4a or wav, ≤ 10 s |
+| `audio` | file | m4a (AAC), wav, webm, mp3, ogg or flac, about 10 s at most (`MAX_AUDIO_BYTES`, default 3 MB) |
+| `lang` | string | optional: the app's current language (`am`, `om` or `en`), used when Gemini can't tell |
 
 **Response 200**
 ```json
 {
-  "intent": "count",
+  "intent": "change",
+  "next": "scan",
   "lang": "am",
-  "paid": null,
-  "price": null,
-  "speech": {"am": "...", "en": "Spread your notes and hold the phone over them."}
+  "paid": 500,
+  "price": 320,
+  "speech": {"en": "You paid 500 birr for 320 birr. Your change should be 180 birr. Spread it out, hold the phone over it and tap the screen.", "am": "..."},
+  "speech_audio": "/speak/3f1c…",
+  "trace_id": "9a0e…"
 }
 ```
-- `intent`: `count` or `change`.
-- `lang`: `am`, `om` or `en`, matching the language the user spoke in. `speech` carries the same three keys.
-- `paid` and `price`: whole birr, only for `change`. If either is missing, `speech` asks for it, and the app records again.
+- `intent`: `count`, `change`, or `unknown` when the question was not understood.
+- `next`: what the app does now. `scan` means the next tap scans with this intent (and `paid`/`price` for a change check). `ask` means speak `speech` and let the user ask again: the question was not understood, an amount is missing, or the price is more than what was paid. `done` means nothing to scan: they paid exactly the price.
+- `lang`: the language the user spoke (`am`, `om` or `en`). The app answers in it.
+- `paid` and `price`: whole birr, only for `change`; `null` when not said. Gemini is told never to guess an amount.
+- `speech`, `speech_audio`, `speech_todo`: see §1.1.
+
+**Errors:** `400 bad_request` (no audio, not audio, or too large), `501 not_implemented` (no `GEMINI_API_KEY` on the backend; the app falls back to tap-to-count), `502 upstream_error` (Gemini failed or timed out). Each carries `speech`, as in §3.
+
+### 1.1 Speech in the user's language
+
+Every answer, error and poll carries `speech`: a dict with `en` and, for `lang` `am` or `om`, that language. The backend writes the English text in code. Gemini translates it once per phrase, and the translation is cached.
+
+- **Numbers are checked.** Every number in the English must appear, in digits, in the translation (extra small numbers, like a note count, are allowed). A translation that drops or changes a number is thrown away. The user then hears English rather than a wrong amount.
+- **`speech_todo`** is set when `speech[lang]` holds English because there is no checked translation (no `GEMINI_API_KEY`, or the translation failed or was thrown away). The app then speaks the English text with an English voice.
+- **`speech_audio`** links a clip of `speech[lang]` that already exists, so the app can play it at once. It is present only for languages Gemini speaks (`GEMINI_TTS_LANGS`, default `am`; Gemini's TTS list has Amharic but not Oromo, so Oromo stays off until a native speaker checks it). If the clip can't be made, the link is left out and the app uses its own TTS.
+- **`GET /speak/{clip_id}`** returns the clip (`audio/wav`, 24 kHz mono, cacheable). It serves only text the backend itself wrote, so it can't be used to speak arbitrary text. An unknown id answers `404`, and a Gemini failure answers `502`.
+- **`GET /phrases?lang=am`** returns the app's own prompts (keys like `counting`, `noNetwork`) as `{"lang": "am", "phrases": {"counting": {"text": "...", "audio": "/speak/…"}}}`, with `audio` `null` where there is no clip. The app downloads the clips so they play offline. The English texts live in `birr/voice/speech.py` (`APP_PHRASES`) and must match `app/src/voice.ts` (`PROMPTS`).
+- Fixed phrases are translated and voiced at startup. Wording can be fixed by editing `translations.<lang>.json` in `VOICE_CACHE_DIR`; edited lines are kept.
 
 ## 2. `POST /scan`: count the notes
 
@@ -128,13 +147,15 @@ Any non-200 response (and any `error` job) carries spoken text, so the user alwa
 |---|---|
 | 400 | `bad_request`: missing field, unsupported file type, or image too large |
 | 404 | `not_found`: unknown or expired `job_id` on `GET /scan/{job_id}` |
-| 502 | `upstream_error`: every Muse read failed (as the `error` of a job, or directly with `wait=true`). SAM failing alone is not an error: the outcome is `rescan` |
+| 404 | `not_found` on `GET /speak/{clip_id}`: a clip id this backend never handed out |
+| 501 | `not_implemented`: `POST /intent` without `GEMINI_API_KEY` |
+| 502 | `upstream_error`: every Muse read failed (as the `error` of a job, or directly with `wait=true`), or Gemini failed on `/intent` or `/speak`. SAM failing alone is not an error: the outcome is `rescan` |
 
 A scan that runs past the 60 s limit is not an error: it ends as `outcome: "rescan"` (§2.1).
 
 ## 4. Trace
 
-Each `/scan` and `/intent` call writes one JSON trace, keyed by `trace_id`. It records the inputs (minus image and audio), each Muse read (reader, labels or error, ms), whether the scan used two reads or the single-read retry and why, SAM's raw and kept counts with its timing, the stage timings, per-note reads, filter decisions, the outcome, and the speech text. Traces show judges the agent loop. They contain no images, audio or personal data.
+Each `/scan` and `/intent` call writes one JSON trace, keyed by `trace_id`. It records the inputs (minus image and audio; for `/intent`, the audio's size and type, the heard intent, amounts and next step, never the transcript), each Muse read (reader, labels or error, ms), whether the scan used two reads or the single-read retry and why, SAM's raw and kept counts with its timing, the stage timings, per-note reads, filter decisions, the outcome, and the speech text. Traces show judges the agent loop. They contain no images, audio or personal data.
 
 ## 5. App behaviour
 
@@ -143,3 +164,12 @@ Each `/scan` and `/intent` call writes one JSON trace, keyed by `trace_id`. It r
 - **`total`:** speak the `speech` text in the user's language.
 - **`guide`:** speak the hint, then capture again with `attempt` + 1.
 - **`rescan`:** speak the prompt, then capture again. After `max_attempts`, say that it can't count these notes, and stop.
+- **Voice question:** hold the screen (or tap Ask) to record, with a strong vibration at the start and nothing spoken while recording. Send it to `POST /intent`, speak `speech`, and follow `next`. After a `change` intent with `next: "scan"`, the next tap scans with `intent=change`, `paid` and `price`.
+- **Speaking:** play `speech_audio` when present. Otherwise speak `speech[lang]` with a phone voice for that language, or `speech.en` (always `speech.en` when `speech_todo` is set).
+
+## 6. `GET /health`
+
+```json
+{"ok": true, "refs": true, "sam": "off", "voice": {"gemini": true, "speaks": ["am"]}}
+```
+`refs`: read B's reference sheets are loaded (without them no scan speaks a total). `sam`: the SAM provider (`roboflow`, `modal` or `off`). `voice.gemini`: Gemini is configured, so `/intent` works and answers come translated. `voice.speaks`: the languages answered with clips.
