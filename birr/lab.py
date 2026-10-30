@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import io
 import json
 import os
@@ -58,7 +59,9 @@ def _check(
     request: Request, x_lab_token: str | None = Header(None), token: str | None = Query(None)
 ):
     want = os.getenv("LAB_TOKEN", "")
-    if not want or (x_lab_token or token) != want:
+    given = x_lab_token or token or ""
+    # Constant-time compare. Prefer the header: a ?token= query string lands in access logs.
+    if not want or not hmac.compare_digest(given.encode(), want.encode()):
         raise HTTPException(status_code=401, detail="bad or missing lab token")
 
 

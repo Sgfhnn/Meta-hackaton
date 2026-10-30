@@ -133,7 +133,7 @@ async def scan(
         return fail(400, "bad_request", say.BAD_REQUEST, "intent must be count or change")
     if intent == "change" and (paid is None or price is None):
         return fail(400, "bad_request", say.NEED_PRICE, "change needs paid and price")
-    raw = await image.read()
+    raw = await image.read(settings.max_upload_bytes + 1)  # never hold more than the limit
     if len(raw) > settings.max_upload_bytes:
         return fail(400, "bad_request", say.BAD_REQUEST, "image too large")
     try:
@@ -206,7 +206,7 @@ async def intent(
 
     if not voice.enabled:
         return fail(501, "not_implemented", say.VOICE_TODO, "GEMINI_API_KEY is not set")
-    raw = await audio.read()
+    raw = await audio.read(settings.max_audio_bytes + 1)
     mime = gemini.audio_mime(audio.filename, audio.content_type)
     trace["inputs"].update(audio_bytes=len(raw), mime=mime)
     if not raw or len(raw) > settings.max_audio_bytes or mime is None:

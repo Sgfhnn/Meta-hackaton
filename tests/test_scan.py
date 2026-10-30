@@ -189,6 +189,13 @@ def test_trace_written_without_image(client, fake):
     assert "base64" not in path.read_text() and "jpeg" not in json.dumps(trace).lower()
 
 
+def test_scan_rejects_an_image_over_the_limit(client, monkeypatch):
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "1000")  # the synthetic photo is larger
+    r = post_scan(client)
+    assert r.status_code == 400
+    assert r.json()["error"] == "bad_request"
+
+
 def test_intent_needs_audio(client):
     # The spoken question is required; without Gemini an upload gets 501 (tests/test_voice.py).
     r = client.post("/intent", data={"lang": "en"})
