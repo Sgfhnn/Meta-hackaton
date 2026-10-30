@@ -132,7 +132,13 @@ export default function App() {
       sayPrompt('busy', lang, true);
       return;
     }
-    const picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    let picked: ImagePicker.ImagePickerResult;
+    try {
+      picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    } catch {
+      announcePrompt('failed'); // e.g. no photo library permission: say so, never stay silent
+      return;
+    }
     if (picked.canceled || !picked.assets?.length) return;
     const a = picked.assets[0];
     await run(async () => ({ uri: a.uri, width: a.width, height: a.height }));
