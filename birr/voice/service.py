@@ -112,8 +112,17 @@ class Voice:
         return fields
 
     async def localize(self, client: httpx.AsyncClient, en: str, lang: str) -> dict:
+        """speech fields in `lang`. The audio clip is made before returning, so the app can play
+        it at once; if Gemini can't make it, speech_audio is left out and the app uses its TTS."""
         await self.translate(client, [en], lang)
-        return self.speech(en, lang)
+        fields = self.speech(en, lang)
+        if "speech_audio" in fields:
+            try:
+                await self.audio(client, fields["speech_audio"].rsplit("/", 1)[-1])
+            except gemini.GeminiError as exc:
+                log.warning("speech clip failed: %s", exc)
+                del fields["speech_audio"]
+        return fields
 
     async def localize_body(self, client: httpx.AsyncClient, body: dict, lang: str) -> dict:
         """Put the user's language into a finished answer that carries English speech."""
@@ -122,6 +131,15 @@ class Voice:
             return body
         rest = {k: v for k, v in body.items() if k not in ("speech", "speech_todo")}
         return {**rest, **(await self.localize(client, en, lang))}
+
+    async def warm(self, client: httpx.AsyncClient, texts: list[str]) -> None:
+        """Translate fixed phrases, then make their clips, so errors and prompts are instant."""
+        for lang in TRANSLATED:
+            await self.translate(client, texts, lang)
+        for lang in sorted(self.settings.gemini_tts_langs & set(TRANSLATED)):
+            for en in texts:
+                if self.enabled and en in self.translations[lang]:
+                    await self.localize(client, en, lang)
 
     async def audio(self, client: httpx.AsyncClient, clip: str) -> bytes | None:
         """WAV for a clip id from this backend, or None if the id is unknown."""

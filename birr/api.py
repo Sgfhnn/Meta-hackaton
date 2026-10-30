@@ -27,17 +27,16 @@ from birr.read import muse
 from birr.scan import ScanRequest
 from birr.voice import gemini
 from birr.voice import speech as say
-from birr.voice.service import LANGS, TRANSLATED, Voice
+from birr.voice.service import LANGS, Voice
 
 POLL_AFTER_MS = 1500
 _CLIP_ID = re.compile(r"[0-9a-f]{32}")
 
 
 async def _warm(client: httpx.AsyncClient, voice: Voice) -> None:
-    """Translate the fixed phrases at startup, so errors and prompts need no Gemini call."""
-    texts = say.FIXED + list(say.APP_PHRASES.values())
-    for lang in TRANSLATED:
-        await voice.translate(client, texts, lang)
+    """Translate and voice the fixed phrases at startup, so errors and prompts need no wait."""
+    if voice.enabled:
+        await voice.warm(client, say.FIXED + list(say.APP_PHRASES.values()))
 
 
 @asynccontextmanager

@@ -266,11 +266,19 @@ def test_translation_that_changes_a_number_is_dropped(gemini_env, monkeypatch):
 
 
 def test_speech_audio_only_for_spoken_languages(gemini_env, monkeypatch):
+    spoken = []
+
+    async def speak(client, text, settings):
+        spoken.append(text)
+        return wav_bytes()
+
     monkeypatch.setattr(gemini, "translate", fake_translate())
+    monkeypatch.setattr(gemini, "speak", speak)
     voice = Voice(Settings())
     am = run(voice.localize(None, "Counting.", "am"))
     om = run(voice.localize(None, "Counting.", "om"))
     assert am["speech_audio"].startswith("/speak/")
+    assert spoken == ["AM-am: Counting."]  # made before localize returned; Oromo is not spoken
     assert om["speech"]["om"] == "AM-om: Counting." and "speech_audio" not in om
     assert Voice(Settings()).speech("Counting.", "en") == {"speech": {"en": "Counting."}}
 
@@ -296,7 +304,7 @@ def voice_client(gemini_env, monkeypatch):
     """A client with Gemini 'configured': every Gemini call goes to a fake."""
     monkeypatch.setenv("TRACE_DIR", str(gemini_env))
     monkeypatch.delenv("MUSE_ONLY_TOTALS", raising=False)
-    state = {"heard": None, "speak_calls": 0}
+    state = {"heard": None, "spoken": []}
 
     async def understand(client, audio, mime, settings):
         if isinstance(state["heard"], Exception):
@@ -304,7 +312,7 @@ def voice_client(gemini_env, monkeypatch):
         return state["heard"]
 
     async def speak(client, text, settings):
-        state["speak_calls"] += 1
+        state["spoken"].append(text)
         return wav_bytes()
 
     monkeypatch.setattr(gemini, "understand", understand)
@@ -400,7 +408,8 @@ def test_speak_serves_and_caches_clips(voice_client):
     assert first.headers["content-type"] == "audio/wav"
     assert first.content[:4] == b"RIFF"
     assert voice_client.get(link).content == first.content
-    assert voice_client.state["speak_calls"] == 1  # the second answer came from the cache
+    # Made once, before /intent answered; both downloads came from the cache.
+    assert voice_client.state["spoken"].count(f"AM-am: {say.COUNT_PROMPT}") == 1
 
 
 @pytest.mark.parametrize("path", ["/speak/" + "0" * 32, "/speak/not-a-clip", "/speak/..%2Fx"])
@@ -408,14 +417,24 @@ def test_speak_unknown_clip_is_404(voice_client, path):
     assert voice_client.get(path).status_code == 404
 
 
+def test_no_audio_link_when_gemini_cannot_speak(voice_client, monkeypatch):
+    async def down(client, text, settings):
+        raise gemini.GeminiError("down")
+
+    monkeypatch.setattr(gemini, "speak", down)
+    voice_client.state["heard"] = heard("change", paid=500, price=320)
+    body = post_intent(voice_client).json()
+    assert body["speech"]["am"] == f"AM-am: {say.change_prompt(500, 320)}"
+    assert "speech_audio" not in body  # the app speaks the text instead
+
+
 def test_speak_gemini_failure_is_502(voice_client, monkeypatch):
     async def down(client, text, settings):
         raise gemini.GeminiError("down")
 
-    voice_client.state["heard"] = heard("count")
-    link = post_intent(voice_client).json()["speech_audio"]
     monkeypatch.setattr(gemini, "speak", down)
-    assert voice_client.get(link).status_code == 502
+    clip = api.app.state.voice.clip_id("am", "AM-am: not made yet")
+    assert voice_client.get(f"/speak/{clip}").status_code == 502
 
 
 def test_phrases(voice_client):
