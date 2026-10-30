@@ -480,3 +480,15 @@ def test_health_reports_voice(voice_client):
 
 def test_health_without_gemini(client):
     assert client.get("/health").json()["voice"] == {"gemini": False, "speaks": []}
+
+
+def test_a_translation_crash_keeps_the_scan_answer(voice_client, fake, monkeypatch):
+    async def broken(client, body, lang):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(api.app.state.voice, "localize_body", broken)
+    fake["labels"] = ["100", "50"]
+    fake["regions"] = []
+    r = post_scan(voice_client, lang="am")
+    assert r.status_code == 200
+    assert r.json()["speech"]["en"]  # English answer, not a crash

@@ -6,6 +6,7 @@ Run: uv run uvicorn birr.api:app --reload
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import time
@@ -31,6 +32,7 @@ from birr.voice.service import LANGS, Voice
 
 POLL_AFTER_MS = 1500
 _CLIP_ID = re.compile(r"[0-9a-f]{32}")
+log = logging.getLogger(__name__)
 
 
 async def _warm(client: httpx.AsyncClient, voice: Voice) -> None:
@@ -86,9 +88,14 @@ def _error(status: int, error: str, text: str, lang: str = "en", trace_id: str |
 
 
 async def _in_language(work, lang: str) -> tuple[int, dict]:
-    """Finish a scan job, then put its answer into the user's language."""
+    """Finish a scan job, then put its answer into the user's language. A translation problem
+    never costs the answer: it then stays in English."""
     status, body = await work
-    return status, await app.state.voice.localize_body(app.state.http, body, lang)
+    try:
+        return status, await app.state.voice.localize_body(app.state.http, body, lang)
+    except Exception:  # noqa: BLE001
+        log.exception("could not localize a scan answer")
+        return status, body
 
 
 @app.exception_handler(RequestValidationError)
@@ -223,7 +230,11 @@ async def intent(
         text, step = say.change_prompt(paid, price), "scan" if paid > price else "done"
     else:
         text, step = say.INTENT_UNKNOWN, "ask"
-    speech = await voice.localize(app.state.http, text, spoken_lang)
+    try:
+        speech = await voice.localize(app.state.http, text, spoken_lang)
+    except Exception:  # noqa: BLE001 - the intent still stands; speak it in English
+        log.exception("could not localize an intent answer")
+        speech = {"speech": {"en": text}}
     ms = int((time.perf_counter() - started) * 1000)
     trace.update(
         outcome=kind, next=step, lang=spoken_lang, paid=paid, price=price, speech_en=text,
