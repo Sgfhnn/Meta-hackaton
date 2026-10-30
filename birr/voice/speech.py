@@ -69,7 +69,7 @@ STILL_COUNTING = "Still counting."
 BAD_REQUEST = "Sorry, I couldn't use that photo. Please take it again."
 NEED_PRICE = "Tell me how much you paid and the price, then scan your change."
 VOICE_TODO = "Voice questions are not ready yet. Tap scan to count your notes."
-COUNT_PROMPT = "Spread your notes and hold the phone over them."
+COUNT_PROMPT = "Spread your notes, hold the phone over them and tap the screen."
 INTENT_UNKNOWN = (
     "Sorry, I did not understand. Ask how much money you have, "
     "or say what you paid and the price to check your change."
@@ -86,7 +86,7 @@ def change_prompt(paid: int, price: int) -> str:
     if paid == price:
         return f"{head} You get no change."
     change = f"Your change should be {paid - price} birr."
-    return f"{head} {change} Spread it out and hold the phone over it."
+    return f"{head} {change} Spread it out, hold the phone over it and tap the screen."
 
 
 # Every fixed backend phrase, translated ahead of time when Gemini is configured.
