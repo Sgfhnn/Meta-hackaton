@@ -3,6 +3,7 @@
 
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -74,6 +75,26 @@ export default function App() {
       return;
     }
     if (!ready || !camera.current) return;
+    const cam = camera.current;
+    await run(async () => {
+      const photo = await cam.takePictureAsync({ quality: 0.9 });
+      return { uri: photo.uri, width: photo.width, height: photo.height };
+    });
+  }
+
+  // Count a photo already on the phone (testing, or a photo someone took for the user).
+  async function pickPhoto() {
+    if (busy) {
+      sayQueued(PROMPTS.busy);
+      return;
+    }
+    const picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    if (picked.canceled || !picked.assets?.length) return;
+    const a = picked.assets[0];
+    await run(async () => ({ uri: a.uri, width: a.width, height: a.height }));
+  }
+
+  async function run(getPhoto: () => Promise<{ uri: string; width: number; height: number }>) {
     setBusy(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     announce(PROMPTS.counting);
@@ -84,7 +105,7 @@ export default function App() {
       if (ticks === STILL_COUNTING_AT_TICK) sayQueued(PROMPTS.stillCounting);
     }, TICK_MS);
     try {
-      const photo = await camera.current.takePictureAsync({ quality: 0.9 });
+      const photo = await getPhoto();
       const jpeg = await preparePhoto(photo.uri, photo.width, photo.height);
       const req = { lang, attempt: attempt.current, maxAttempts: MAX_ATTEMPTS };
       const result = await scan(jpeg, req, SCAN_TIMEOUT_MS);
@@ -162,6 +183,15 @@ export default function App() {
         accessibilityState={{ busy }}
       />
       <Pressable
+        style={styles.photoButton}
+        onPress={pickPhoto}
+        accessibilityRole="button"
+        accessibilityLabel="Count a saved photo"
+        accessibilityHint="Opens your photos and counts the notes in the one you choose"
+      >
+        <Text style={styles.langText}>Photo</Text>
+      </Pressable>
+      <Pressable
         style={styles.langButton}
         onPress={nextLanguage}
         accessibilityRole="button"
@@ -200,10 +230,23 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#fff',
   },
+  photoButton: {
+    position: 'absolute',
+    top: 48,
+    left: 16,
+    minHeight: 56,
+    minWidth: 100,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    borderRadius: 28,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
   langText: { color: '#fff', fontSize: 20, fontWeight: '700', textAlign: 'center' },
   mock: {
     position: 'absolute',
-    top: 56,
+    top: 116,
     left: 16,
     color: '#ffd400',
     fontSize: 16,
