@@ -29,6 +29,8 @@ packages = ["birr"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# tools/ holds one-off experiment and test scripts, kept as they were run
+extend-exclude = ["tools"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

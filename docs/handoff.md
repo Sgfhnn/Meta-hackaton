@@ -1,50 +1,81 @@
-# Handoff: birr cash assistant
+# Handoff: birr cash assistant (Oct 30, 2026)
 
-Read this first in any new session. It holds the state as of 28 Oct 2026, morning (EAT). Check Slack in #meta-hackathon for anything newer.
+From Claude to Hark. Read this alongside Slack #meta-hackathon, which may have newer news. Box URLs and keys live in Slack and on the box, never in this repo.
 
-## Where things stand
+## 1. Open PRs and merge order
 
-- **main** has the foundation (PR #1), the API contract (PR #3 and #4) and the live backend (PR #7, Hark's `/scan`).
-- **Open:**
-  - PR #2 (Kimi, A/B harness): needs a rebase on main and Hark's review fixes.
-  - PR #6 (Hermes, eval matrix): needs the gate v2 fixes and the ruff E501 fix at `evals/eval_matrix.py:95`.
-  - PR #8 (`docs/birr-knowledge.md`): knowledge pack, branch `claude/birr-knowledge-pack`.
-  - PR #9 (`birr/read/muse.py`, knowledge prompt): branch `claude/knowledge-prompt`. Hark recommends not merging as written.
-- **Keys:** `BASETEN_API_KEY` and `ROBOFLOW_API_KEY` must be set in the environment for the session. Never paste them into chat, Slack or the repo.
+| PR | What | Status |
+|---|---|---|
+| #13 | App: count a saved photo (Hark) | Approve. Merge first. |
+| #16 | App: Birr logo, ask by voice, change check, Amharic answers | Built on #13. Merge after it. CI green. |
+| #10 | Scan v2 + lab (Hark) | Already contained in #15. Merge it first if you want it under its own PR, or close it once #15 merges. |
+| #15 | Backend: SAM provider switch, SAM 3.1 on Modal, Gemini voice, docs | Built on `hark/reader-2048` (`c9af833`) plus `main`. CI green, 144 tests. |
+| #14 | Reader prompt v3.1 (Muse) → `hark/reader-2048` | Review posted: report how many totals it speaks (not only "zero wrong"), and keep the Ge'ez glyphs. After it merges, merge `hark/reader-2048` into `claude/sam-providers` so #15 carries v3.1. |
+| #2, #6, #8, #9 | Early harness, eval matrix, knowledge pack, old prompt | Reviews posted: superseded, suggest closing. #8 could stay with a status note. |
 
-## Product and gate
+The two final PRs, #15 and #16, merge into each other without conflicts in either order.
 
-- Voice-first Ethiopian birr counter for blind and low-vision users. Scope is 5, 10, 50, 100, 200 (2020 series; older series seen in photos).
-- Muse Spark Open (Baseten) reads each note. SAM finds and counts notes (Roboflow hosted SAM 3 live; SAM 3.1 on Kaggle for the gate). Totals and change are computed in code, never by the model.
-- A total is spoken only when SAM's count equals Muse's count and no note is partial or unclear.
-- **Gate v2 (locked 01:00 EAT, sha256 22c7bcf0…61cbed):** ≥18/20 exact after at most one rescan, ≥95% per-note accuracy, zero wrong totals spoken, and on photos with no first-pass total, guided rescans resolve ≥2 more than plain rescans.
-- **Gate v3 (proposed, not locked):** zero wrong totals on the locked 20, plus at least one rescan turned into a correct total by SAM guidance. Lock it before new photos are shot. Decision is Anu's.
-- Fallback if the gate fails: narrow the product rather than switch to the Auditor, unless Anu decides otherwise.
+## 2. What #15 and #16 add
 
-## Results so far
+**Backend (#15).** The contract is `docs/api.md`.
+- `SAM_PROVIDER` is `roboflow` (default), `modal` or `off`, and `SAM_OFF=1` still means off. `/health` shows which one is in use.
+- `modal_sam/` is SAM 3.1 (default) or SAM 3 on Modal, behind a Modal access-token pair. Steps are in `modal_sam/README.md`. **Never deployed.** SAM 3.1 has no official recipe for one still photo, so the photo runs as a one-frame video. Compare it with SAM 3 before choosing.
+- `POST /intent` (Gemini) returns `intent` (`count`, `change` or `unknown`), `next` (`scan`, `ask` or `done`), `lang`, `paid` and `price`. No audio or transcript is kept.
+- Answers are translated into Amharic and Oromo once per phrase and cached. **A translation that drops or changes a number is thrown away**, and the user hears English.
+- `speech_audio` links to `GET /speak/{id}`: an Amharic clip made before the answer returns, for backend-written text only. `GET /phrases?lang=am` returns the app's prompts, translated, with clips.
+- Oromo voice is off by default, because Gemini's TTS list has no Oromo: `GEMINI_TTS_LANGS=am,om` turns it on. Without `GEMINI_API_KEY`, everything stays English and `/intent` answers 501.
+- From the PR review: the lab token is compared in constant time, and uploads are read only up to their size limit.
 
-- Muse alone, full photo, 8 dev photos: 7/8 exact, 0 wrong totals. Miss on D08 (11 fanned notes, marked unclear).
-- SAM box crops + Muse: 5/8. Mask crops + Muse: 5/8.
-- Muse reads, SAM count must agree: 7/8, 0 wrong.
-- PR #9 live run on the locked 20: 0/20 exact. 46 notes unclear, p50 29 s, p90 53 s. Cause: the two-signal rule marks colour-only notes unclear.
-- Muse alone with colour map, 768 px: 12/20 exact, 5 wrong totals. A count check from SAM is still required.
-- Hark's A/B (colour counts when SAM count matches; 768 px vs 1280 px) was in progress when this was written. Check thread 1793127996.560999.
+**App (#16).**
+- The logo is used everywhere. `app/assets/logo.svg` is the source; `tools/logo/` rebuilds it.
+- To ask by voice, hold the screen, speak and let go. Or tap **Ask**, speak and tap again; this path works with TalkBack.
+- After "I paid 500, the price is 320", the next tap scans the change.
+- Amharic answers play the backend's clips, with a fallback to the phone's voice after 5 s. Prompts come from `/phrases` and are kept offline. The app switches to the language the user spoke.
 
-## Open decisions for Anu
+## 3. Turning it on (live box)
 
-1. Gate v3 terms, and lock them before fresh photos.
-2. Whether PR #9 merges after the A/B.
-3. Whether to disclose in the README: gate v1 failed on dev and was replaced, and the late gate v2 run used SAM 3 rather than SAM 3.1.
+After merging #15:
+1. Keep the current live settings (`SAM_OFF=1`, `MUSE_ONLY_TOTALS=1`, the reference sheets in `REFS_DIR`). Run one uvicorn worker.
+2. For voice, **Anu adds `GEMINI_API_KEY` to the box's `.env`. It never goes into chat.** The defaults are fine: `GEMINI_MODEL=gemini-3.8-flash`, `GEMINI_TTS_MODEL=gemini-3.8-flash-tts`, `GEMINI_TTS_LANGS=am`.
+3. `VOICE_CACHE_DIR` (default `voice_cache/`) must be writable and survive restarts. It holds the translations, and wording can be fixed by editing `translations.am.json` there, plus the clips.
+4. Restart, then check `GET /health`: it should show `"voice": {"gemini": true, "speaks": ["am"]}`. The first start translates 24 fixed phrases (2 calls) and makes about 24 Amharic clips, in the background. That takes a minute or two and costs a few cents.
+5. For the app, after pulling #16, run `cd app && npm install` (new: `expo-audio`, `expo-splash-screen`). Restart Expo with `--clear`, with `EXPO_PUBLIC_API_URL` pointing at the box.
 
-## Next steps
+## 4. First live checks, in order
 
-1. Run the locked-20 and dev sets with real keys. Use the Drive datasets from Anu, kept outside the repo. Do not tune on the locked set.
-2. Report exact totals, wrong totals, per-note accuracy and p50/p90 latency in the plan thread (1793094827.681179).
-3. Resize to 768 px for latency. Do not cap `max_tokens` at 600: Hark measured 450–770 reasoning tokens.
-4. Before submission (Nov 4, 9 PM ET; internal target 8 PM EAT): repo goes public, README disclosure, 3-minute demo video. No secrets or datasets in the repo.
+1. **Real Gemini.** Ask "ስንት ብር አለኝ?" and "I paid 500 for 320" in Amharic and in English. Check `intent`, `next` and the amounts, and read the `/intent` traces.
+2. **Amharic wording and voice.** Anu listens to the clips. Fix the wording in `translations.am.json`, or hand the fixes to us.
+3. **Phone.** Try hold-to-talk, Ask with TalkBack on, the change check, and the offline prompt (airplane mode should play the Amharic "cannot reach the server" clip).
+4. **Oromo.** A native speaker decides whether Gemini's Oromo voice is acceptable. If it is, set `GEMINI_TTS_LANGS=am,om`.
+5. **Prompt v3.1 (#14).** Get its coverage numbers on the locked 20 before it goes live.
+6. **SAM, if the team still wants to test it** (as Muse proposed): use `SAM_PROVIDER=roboflow` with `SAM_ADVISORY=1`, so SAM's count is logged without blocking a total. Or deploy Modal and compare on the dev set with `tools/experiments/run_sam.py`; it follows `SAM_PROVIDER` and `SAM_MODAL_*`.
 
-## Working rules
+## 5. Not verified yet
 
-- All work on branches, PRs into main. Anu merges, except where Anu's temporary merge authority applies (green CI, no conflicts, reviewed head, announced in Slack, no force-push, no deletes, no visibility changes, no gate changes, no secrets, no locked-20 changes).
-- Do not push or open a PR without the user's approval.
-- Keep Slack and chat replies short.
+- Real Gemini. All voice tests used a fake Gemini, including the end-to-end run in `tools/e2e/`.
+- A Modal GPU deploy.
+- A real Android phone with TalkBack.
+- A native speaker reading the Amharic and Oromo wording.
+
+## 6. Submission checklist (Nov 4, 9 pm ET; team target 8 pm EAT)
+
+- Merge the final PRs, and close the superseded ones.
+- Before the repo goes public:
+  - no secrets (gitleaks runs in CI);
+  - no pre-event photos, reference sheets or results (they live in `REFS_DIR` on the box and in Anu's Drive folder).
+- Check the README "Disclosures" section (in #15) against what actually runs on demo day, such as the SAM setting and the languages.
+- `docs/licenses.md` lists every model, service, package and the logo font.
+- The demo video states what was pre-existing, shows a trace, and asks a question in Amharic.
+- Rotate the API keys that were shared in chat for testing.
+
+## 7. Where things are
+
+- Backend: `birr/` (`scan.py`, `read/`, `segment/`, `voice/gemini.py`, `voice/service.py`, `voice/speech.py`, `lab.py`). The SAM service is in `modal_sam/`, the app in `app/`, the contract in `docs/api.md`, and scripts in `tools/` (see `tools/README.md`).
+- Outside the repo: the reference sheets (`REFS_DIR` on the box), the dev and locked photos (Anu's Drive, link in Slack), and the lab data (`LAB_DIR`, behind the `/lab` endpoints with `LAB_TOKEN`).
+
+## 8. Decisions on record
+
+- The backend is hosted on instabox. Modal is only for the optional SAM service.
+- Tests run on Muse Spark 1.3 (contributor tier). The real demo runs on Muse Spark Open on Baseten (standard tier).
+- SAM is off live (Anu's call) and stays switchable while the team tests it.
+- Respect the spend caps. No big batch runs without Anu's OK.
