@@ -165,4 +165,10 @@ async def intent_stub(lang: Annotated[str, Form()] = "en"):
 @app.get("/health")
 async def health():
     # refs: read B's reference sheets are loaded; without them no scan can speak a total.
-    return {"ok": True, "refs": muse.load_refs(get_settings().refs_dir) is not None}
+    # sam: which SAM provider counts the notes (roboflow, modal or off).
+    settings = get_settings()
+    return {
+        "ok": True,
+        "refs": muse.load_refs(settings.refs_dir) is not None,
+        "sam": settings.sam_provider,
+    }

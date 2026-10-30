@@ -51,6 +51,24 @@ class Settings:
     # SAM_OFF=1: never call SAM. Pair with MUSE_ONLY_TOTALS=1 so two agreeing reads speak;
     # disagreement then always ends as rescan (no "move this note" hint).
     sam_off: bool = field(default_factory=lambda: _flag("SAM_OFF", False))
+    # Which SAM serves the count: "roboflow" (hosted SAM 3, the default), "modal" (our own SAM 3.1
+    # endpoint, see modal_sam/) or "off". SAM_OFF=1 still means off.
+    sam_provider: str = field(
+        default_factory=lambda: (
+            "off"
+            if _flag("SAM_OFF", False)
+            else os.getenv("SAM_PROVIDER", "roboflow").strip().lower()
+        )
+    )
+    sam_prompt: str = field(default_factory=lambda: os.getenv("SAM_PROMPT", "banknote").strip())
+    # Modal SAM 3.1 endpoint: the URL `modal deploy` prints, plus a proxy-auth token pair.
+    sam_modal_url: str = field(default_factory=lambda: os.getenv("SAM_MODAL_URL", "").strip())
+    sam_modal_key: str = field(default_factory=lambda: os.getenv("SAM_MODAL_KEY", ""))
+    sam_modal_secret: str = field(default_factory=lambda: os.getenv("SAM_MODAL_SECRET", ""))
+    # A GPU container that has scaled to zero needs time to start and load the model.
+    sam_modal_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("SAM_MODAL_TIMEOUT_S", "25"))
+    )
     max_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     )

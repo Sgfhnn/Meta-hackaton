@@ -51,7 +51,7 @@ async def _read(client, jpeg, settings, reader: str, slot: int, with_refs: bool 
 
 async def _sam(client, jpeg, width, height, settings) -> dict:
     start = time.perf_counter()
-    if settings.sam_off:
+    if settings.sam_off or settings.sam_provider == "off":
         return {"ok": False, "error": "disabled", "ms": 0}
     try:
         regions = await sam.segment(client, jpeg, width, height, settings)
@@ -153,6 +153,7 @@ async def execute(
     trace["mode"] = mode
 
     regions = None
+    trace["sam_provider"] = settings.sam_provider
     if sam_result["ok"]:
         regions, decisions = filter_regions(
             sam_result["regions"], settings.sam_min_score, settings.sam_min_area
