@@ -28,12 +28,12 @@ fail() { echo "::error::$*"; log "FAIL: $*"; FAIL=1; }
 shot() { adb exec-out screencap -p > "$OUT/$1.png" || true; }
 dump() {
   # The camera preview can keep the UI from going idle; retry a few times.
-  for _ in 1 2 3; do
+  for _ in 1 2 3 4 5; do
     if adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb pull /sdcard/ui.xml "$OUT/$1.xml" >/dev/null 2>&1; then
       grep -o 'text="[^"]*"' "$OUT/$1.xml" | sed 's/^text="//;s/"$//' | grep -v '^$' > "$OUT/$1.txt"
       return 0
     fi
-    sleep 1
+    sleep 2
   done
   echo "(uiautomator dump failed)" > "$OUT/$1.txt"
   return 1
@@ -54,7 +54,11 @@ jslines() { echo $(($(wc -l < "$JSLOG") + 1)); }
 screen_after() { tail -n +"$1" "$JSLOG" | grep -o '\[birr\] screen: .*' | tail -1 | sed 's/^\[birr\] screen: //'; }
 # CI emulators are slow and Android shows "System UI isn't responding" / "X isn't responding"
 # dialogs over the app. Answer "Wait" so taps reach the app.
+LAST_DIALOG_CHECK=-100
 dismiss_dialogs() {
+  # A uiautomator dump costs the slow emulator seconds of CPU: look at most every 8 s.
+  ((SECONDS - LAST_DIALOG_CHECK < 8)) && return 0
+  LAST_DIALOG_CHECK=$SECONDS
   adb shell uiautomator dump /sdcard/anr.xml >/dev/null 2>&1 || return 0
   local xml b x1 y1 x2 y2
   xml=$(adb shell cat /sdcard/anr.xml 2>/dev/null)
@@ -86,6 +90,15 @@ tap_talk() {
   sleep "$1"
   adb shell input tap $((W / 2)) $((H * 4 / 10))
 }
+# Hold the screen, speak for $1 s once the recorder runs, let go: one hold-to-talk turn.
+hold_talk() {
+  local mark x=$((W / 2)) y=$((H * 4 / 10))
+  mark=$(jslines)
+  adb shell input motionevent DOWN $x $y
+  wait_js 'recording started' 25 "$mark" || log "recorder start not logged within 25 s"
+  sleep "$1"
+  adb shell input motionevent UP $x $y
+}
 no_net_check() { # $1 label, $2 message
   case "$2" in *"$NO_NET"*|*"ሰርቨሩን ማግኘት"*) fail "$1: app says it cannot reach the server" ;; esac
 }
@@ -104,22 +117,26 @@ scan_round_trip() {
   tail -n +"$since" "$JSLOG" | grep -o 'POST /frame .*' | sort | uniq -c | tee "$OUT/$1-frames.txt"
 }
 
-# After a scan answer, the app may look again by itself (guide / rescan, up to 3 attempts).
-# Wait until no new look starts within 12 s.
+# After a scan answer, the app may look again by itself (guide / rescan, up to 3 attempts), and
+# that look can start before the test gets here. Count looks and finished scans since the turn
+# began ($2); wait until every look has finished and no new one starts within 12 s.
+SCAN_DONE='GET /scan/.* (done|error)|POST /scan -> 200|scan failed'
 settle_scans() {
-  local mark looks=0
-  for _ in 1 2 3; do
+  local since=$2 starts ends mark
+  for _ in 1 2 3 4 5; do
+    starts=$(tail -n +"$since" "$JSLOG" | grep -c 'guidance start')
+    ends=$(tail -n +"$since" "$JSLOG" | grep -cE "$SCAN_DONE|guidance end: cancelled")
+    if ((starts > ends)); then
+      log "$1: look $starts still running, waiting for it"
+      mark=$(jslines)
+      wait_js "$SCAN_DONE|guidance end: cancelled" 180 "$mark" || { fail "$1: look $starts never finished"; return 1; }
+      continue
+    fi
     mark=$(jslines)
     sleep 12
-    if tail -n +"$mark" "$JSLOG" | grep -q 'guidance start'; then
-      looks=$((looks + 1))
-      log "$1: the answer asked for another look ($looks)"
-      wait_js 'GET /scan/.* (done|error)|POST /scan -> 200|scan failed' 180 "$mark" || fail "$1: the extra look never finished"
-    else
-      return 0
-    fi
+    tail -n +"$mark" "$JSLOG" | grep -q 'guidance start' || return 0
   done
-  sleep 12
+  fail "$1: the app kept looking again by itself (more than 4 looks)"
 }
 
 log "runner public IP: $(curl -s -m 10 https://api.ipify.org || echo unknown)"
@@ -154,7 +171,7 @@ cat "$OUT/01-language.txt"
 grep -q 'Built with Muse Spark Open' "$OUT/01-language.txt" || fail "'Built with Muse Spark Open' not on the start screen"
 SINCE=$(jslines)
 adb shell input tap $((W / 2)) $((H / 4)) # top half: English
-if wait_js "\[birr\] screen: Hi, I'm Birr" 40 "$SINCE"; then log "greeted"; else fail "no greeting after choosing English"; fi
+if wait_js "\[birr\] screen: Hi, I'm Birr" 90 "$SINCE"; then log "greeted"; else fail "no greeting after choosing English"; fi
 sleep 6
 dismiss_dialogs
 shot 02-greeting
@@ -196,13 +213,13 @@ echo "$MSG" > "$OUT/scan-answer.txt"
 no_net_check scan "$MSG"
 case "$MSG" in ""|"Counting."|*"could not count that"*) fail "scan: no backend answer on screen ($MSG)" ;; esac
 # A guide/rescan answer starts another look by itself (up to 3 attempts): let them finish.
-settle_scans scan
+settle_scans scan "$SINCE"
 
 # ---- 4. hold to talk
-log "hold to talk (7.5 s)"
+log "hold to talk: finger down, 2 s after the recorder starts, finger up"
 dismiss_dialogs
 SINCE=$(jslines)
-adb shell input swipe $((W / 2)) $((H * 4 / 10)) $((W / 2)) $((H * 4 / 10)) 7500
+hold_talk 2
 if wait_js '\[birr\] POST /assist|/assist failed' 60 "$SINCE"; then log "hold-to-talk finished"; else fail "hold to talk: POST /assist never answered"; fi
 sleep 3
 shot 05-hold
@@ -251,7 +268,7 @@ no_net_check "Amharic scan" "$MSG"
 tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /frame lang=am' || fail "Amharic: /frame not sent with lang=am"
 if tail -n +"$SINCE" "$JSLOG" | grep -qE 'clip failed|clip did not start'; then fail "Amharic clip did not play"; fi
 if tail -n +"$SINCE" "$JSLOG" | grep -qE '\[birr\] lang: (en|om)'; then fail "Amharic: language switched during the scan"; fi
-settle_scans amharic-scan
+settle_scans amharic-scan "$SINCE"
 
 # ---- 6. relaunch: the language is remembered
 sleep 10

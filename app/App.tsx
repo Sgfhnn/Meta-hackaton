@@ -149,6 +149,10 @@ export default function App() {
   }
 
   function announceAnswer(answer: Spoken, answerLang: Lang, otherwise: PhraseKey) {
+    if (!Object.values(answer.speech ?? {}).some(Boolean)) {
+      announcePrompt(otherwise); // nothing to say from the server (e.g. a gateway error page)
+      return;
+    }
     const shown = speakAnswer(answer.speech, answerLang, answer.speech_audio, !answer.speech_todo);
     if (shown) {
       setMessage(shown);
@@ -359,9 +363,10 @@ export default function App() {
     try {
       if (!assistMissing.current) {
         let result = await assist(input, current(), SESSION_ID, convo.current, ASSIST_TIMEOUT_MS);
-        // A recogniser or Muse hiccup (502): send the same turn once more before saying sorry.
-        if (result.kind === 'error' && result.body.error === 'upstream_error') {
-          console.log('[birr] /assist upstream error, retrying once');
+        // A recogniser or Muse hiccup (502, or a gateway 5xx) or a dropped connection: send the
+        // same turn once more before saying sorry. A timeout is not retried (30 s is long enough).
+        if ((result.kind === 'error' && result.body.error === 'upstream_error') || result.kind === 'network') {
+          console.log(`[birr] /assist ${result.kind === 'network' ? 'network error' : 'upstream error'}, retrying once`);
           result = await assist(input, current(), SESSION_ID, convo.current, ASSIST_TIMEOUT_MS);
         }
         if (result.kind === 'missing') assistMissing.current = true;

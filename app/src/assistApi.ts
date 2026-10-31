@@ -27,9 +27,18 @@ async function post<T>(path: string, form: FormData, timeoutMs: number, label: s
       console.log(`[birr] POST ${path} -> ${status} (backend has no ${path})`);
       return { kind: 'missing' };
     }
-    const body = JSON.parse(text);
-    console.log(`[birr] POST ${path} ${label} -> ${status}${status === 200 ? ` ${summary(body)}` : ''}`);
-    return status === 200 ? { kind: 'ok', body: body as T } : { kind: 'error', body: body as ScanError };
+    let body: unknown = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = null; // a proxy's HTML error page, or a cut-off answer
+    }
+    console.log(`[birr] POST ${path} ${label} -> ${status}${status === 200 && body ? ` ${summary(body)}` : ''}`);
+    if (body && status === 200) return { kind: 'ok', body: body as T };
+    if (body) return { kind: 'error', body: body as ScanError };
+    // A 5xx without our JSON (gateway/proxy): the server side failed, not the phone's network.
+    if (status >= 500) return { kind: 'error', body: { error: 'upstream_error', speech: {} } };
+    return { kind: 'network' };
   } catch (e) {
     console.warn(`[birr] ${path} failed`, controller.signal.aborted ? '(timeout)' : '', e);
     return controller.signal.aborted ? { kind: 'timeout' } : { kind: 'network' };
