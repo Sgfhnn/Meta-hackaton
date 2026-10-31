@@ -44,6 +44,15 @@ wait_js() {
   return 1
 }
 jslines() { echo $(($(wc -l < "$JSLOG") + 1)); }
+# Centre of the Ask button in uiautomator dump $1, as "X Y" (empty if not found). It moves: the
+# message box under it grows with the text (two lines of Amharic push it up).
+ask_center() {
+  local b x1 y1 x2 y2
+  b=$(grep -o 'content-desc="Ask a question"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "$1" 2>/dev/null | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
+  [ -n "$b" ] || return 1
+  read -r x1 y1 x2 y2 <<<"$(echo "$b" | tr -c '0-9' ' ')"
+  echo "$(((x1 + x2) / 2)) $(((y1 + y2) / 2))"
+}
 # The last "screen:" message after line $1.
 screen_after() { tail -n +"$1" "$JSLOG" | grep -o '\[birr\] screen: .*' | tail -1 | sed 's/^\[birr\] screen: //'; }
 # CI emulators are slow and Android shows "System UI isn't responding" / "X isn't responding"
@@ -203,12 +212,16 @@ if grep -q 'አማርኛ' "$OUT/07-language.txt" 2>/dev/null; then
   # ---- a voice question in Amharic: the app must stay in Amharic (the phone bug: it flipped back
   # to English when the backend guessed the question was English)
   sleep 4
-  log "voice in Amharic (Ask button): tap $AX,$AY, wait 3 s, tap again"
   dismiss_dialogs
+  read -r BX BY <<<"$(ask_center "$OUT/08-amharic-answer.xml" || echo "$AX $AY")"
+  log "voice in Amharic (Ask button): tap $BX,$BY, wait 3 s, tap Ask again"
   SINCE=$(jslines)
-  adb shell input tap $AX $AY
+  adb shell input tap $BX $BY
   sleep 3
-  adb shell input tap $AX $AY
+  dump 09-amharic-listening
+  read -r BX BY <<<"$(ask_center "$OUT/09-amharic-listening.xml" || echo "$BX $BY")"
+  log "second tap at $BX,$BY"
+  adb shell input tap $BX $BY
   if wait_js '\[birr\] POST /intent|intent failed' 60 "$SINCE"; then log "Amharic intent finished"; else fail "Amharic: POST /intent never answered"; fi
   sleep 8 # the answer (clip or voice) plays
   shot 09-amharic-intent
