@@ -3,10 +3,8 @@
 //   GET  /phrases  the app's own prompts in Amharic or Oromo, with clips kept on the phone
 //   GET  /health   whether the backend answers in Amharic and Oromo
 
-import { Directory, File, Paths } from 'expo-file-system';
-import { Platform } from 'react-native';
-
 import { mockIntent } from './mock';
+import { cacheClip } from './voice';
 import { API_URL, filePart, postForm, usingMock } from './scan';
 import type { IntentResponse, Lang, Phrases, ScanError } from './types';
 
@@ -60,11 +58,28 @@ export async function backendTranslates(tries = 3): Promise<boolean> {
 }
 
 /**
- * The app's prompts in `lang`. Clip links come back as full URLs, or as local files once
- * downloaded, so "I cannot reach the server" still plays when the network is down.
+ * The app's prompts in `lang`. Resolves as soon as the texts arrive, with clip links to the
+ * server; the clips then download one by one in the background (voice.ts cacheClip) and each
+ * link becomes a local file once it is there, so "I cannot reach the server" still plays when
+ * the network is down later. One request per language at a time (the language screen and the
+ * chosen language used to fetch, and write, the same files at once).
  */
-export async function fetchPhrases(lang: Lang): Promise<Phrases> {
-  if (usingMock || lang === 'en') return {};
+const phraseRequests: Partial<Record<Lang, Promise<Phrases>>> = {};
+
+export function fetchPhrases(lang: Lang): Promise<Phrases> {
+  if (usingMock || lang === 'en') return Promise.resolve({});
+  const running = phraseRequests[lang];
+  if (running) return running;
+  const request = loadPhrases(lang);
+  phraseRequests[lang] = request;
+  request.then((p) => {
+    // Keep a good answer for this launch; ask again next time only if it failed.
+    if (Object.keys(p).length === 0 && phraseRequests[lang] === request) delete phraseRequests[lang];
+  });
+  return request;
+}
+
+async function loadPhrases(lang: Lang): Promise<Phrases> {
   let phrases: Phrases;
   try {
     const res = await fetch(`${API_URL}/phrases?lang=${lang}`);
@@ -74,25 +89,25 @@ export async function fetchPhrases(lang: Lang): Promise<Phrases> {
     console.warn('[birr] phrases fetch failed', e);
     return {};
   }
-  const dir = Platform.OS === 'web' ? null : new Directory(Paths.cache, 'phrases');
-  try {
-    dir?.create({ intermediates: true, idempotent: true });
-  } catch (e) {
-    console.warn('[birr] no phrase cache folder', e); // play the clips from the server instead
-  }
   for (const phrase of Object.values(phrases)) {
-    if (!phrase?.audio) continue;
-    const remote = `${API_URL}${phrase.audio}`;
-    phrase.audio = remote;
-    if (!dir) continue;
-    // The clip id changes whenever the text or voice changes, so a kept file never goes stale.
-    const file = new File(dir, `${phrase.audio.split('/').pop()}.wav`);
-    try {
-      if (!file.exists) await File.downloadFileAsync(remote, file, { idempotent: true });
-      phrase.audio = file.uri;
-    } catch (e) {
-      console.warn('[birr] phrase clip download failed', remote, e); // keep the server link
-    }
+    if (phrase?.audio?.startsWith('/')) phrase.audio = `${API_URL}${phrase.audio}`;
   }
+  void (async () => {
+    // The ones said first go first.
+    const order = ['chooseLanguage', 'languageChosen', 'greeting', 'listening', 'heardFailed', 'noNetwork'];
+    const entries = Object.entries(phrases).sort(
+      ([a], [b]) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99),
+    );
+    let saved = 0;
+    for (const [, phrase] of entries) {
+      if (!phrase?.audio || !/^https?:/.test(phrase.audio)) continue;
+      const local = await cacheClip(phrase.audio, 60_000);
+      if (local.startsWith('file:')) {
+        phrase.audio = local;
+        saved += 1;
+      }
+    }
+    console.log(`[birr] phrases ${lang}: ${saved} clips on the phone`);
+  })();
   return phrases;
 }

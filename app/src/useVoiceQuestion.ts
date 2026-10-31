@@ -32,6 +32,16 @@ export const AUTO = {
   onsetTicks: 2, // ...for 200 ms
 };
 const OPTIONS: RecordingOptions = { ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true };
+// Every field set each time (fields left out keep or reset to defaults that differ per platform).
+// 'mixWithOthers': no audio focus request, so a clip is never held back by focus.
+const RECORDING_MODE = {
+  allowsRecording: true,
+  playsInSilentMode: true,
+  shouldRouteThroughEarpiece: false,
+  shouldPlayInBackground: false,
+  interruptionMode: 'mixWithOthers',
+} as const;
+const PLAYBACK_MODE = { ...RECORDING_MODE, allowsRecording: false } as const;
 
 export type ListenMode = 'tap' | 'hold' | 'auto';
 export type Recording =
@@ -86,7 +96,8 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
       console.warn('[birr] recorder.stop failed', e); // no file: reported as failed below
     }
     try {
-      await setAudioModeAsync({ allowsRecording: false }); // play answers on the speaker again
+      // Play answers on the speaker again (voice.ts sets this again before every clip).
+      await setAudioModeAsync(PLAYBACK_MODE);
     } catch (e) {
       console.warn('[birr] audio mode reset failed', e);
     }
@@ -218,7 +229,7 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
       return;
     }
     try {
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await setAudioModeAsync(RECORDING_MODE);
       await recorder.prepareToRecordAsync();
       recorder.record();
     } catch (e) {
@@ -241,11 +252,18 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
     if (!wanted.current) void finish('manual');
   }
 
+  /** The app is about to play a clip: throw away a hands-free take that has heard nothing yet. */
+  function yieldToApp(): Promise<void> {
+    if (active.current && mode.current === 'auto' && !speechAt.current) return finish('app speaking');
+    return Promise.resolve();
+  }
+
   return {
     listening,
     start,
     stop,
     cancel,
+    yieldToApp,
     /** A hands-free take is running. */
     isAuto: () => active.current && mode.current === 'auto',
     /** The hands-free take has heard speech. */

@@ -77,7 +77,8 @@ export type PhraseKey =
   | 'greeting'
   | 'chooseLanguage'
   | 'holdStill'
-  | 'thinking';
+  | 'thinking'
+  | 'languageChosen';
 
 export type Phrases = Partial<Record<PhraseKey, { text: string; audio: string | null }>>;
 
@@ -120,6 +121,7 @@ export type AssistState = {
   pending_paid: number | null;
   pending_price: number | null;
   camera_open?: boolean; // live guidance is running ("take it" / "stop" act on the camera)
+  audio_log?: string[]; // the last clip outcomes, kept in the backend trace (diagnostics only)
 };
 
 // POST /frame: is this small camera frame good enough to count? (docs/api.md section 8)

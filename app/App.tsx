@@ -22,12 +22,15 @@ import {
   loadVoices,
   playClip,
   promptText,
+  recentAudioLog,
   say,
   sayPrompt,
   sayThen,
+  setBeforeClip,
   setPhrases,
   speakAnswer,
   stopSpeaking,
+  trackPhrases,
   whenQuiet,
 } from './src/voice';
 import { askIntent, backendTranslates, fetchPhrases, type IntentOutcome } from './src/voiceApi';
@@ -82,6 +85,12 @@ export default function App() {
   const [lang, setLangState] = useState<Lang | null>(() => savedLang());
   const langRef = useRef<Lang>(lang ?? 'en');
   const question = useVoiceQuestion(onRecorded);
+  // A clip is about to play: a hands-free take that has heard nothing yet makes way (and
+  // listens again once the clip is over), so the microphone never holds the audio session.
+  useEffect(() => {
+    setBeforeClip(() => question.yieldToApp());
+    return () => setBeforeClip(null);
+  });
   // Hands-free: the app listens by itself after it speaks. "Stop" pauses it until the next tap.
   const handsFree = useRef(true);
   const listenToken = useRef(0); // a newer listen request cancels an older one still waiting
@@ -108,8 +117,7 @@ export default function App() {
     // First launch: ask for the language by voice, in English and then in Amharic.
     if (savedLang() === null) {
       console.log('[birr] screen: choose a language');
-      fetchPhrases('am').then((p) => {
-        setPhrases('am', p);
+      loadPhrasesFor('am').then((p) => {
         sayThen(promptText('chooseLanguage', 'en'), 'en-US', () => {
           const clip = p.chooseLanguage?.audio;
           if (clip) playClip(clip, () => undefined);
@@ -138,7 +146,7 @@ export default function App() {
     if (!lang) return;
     langRef.current = lang;
     console.log(`[birr] lang: ${lang}`);
-    if (lang !== 'en') fetchPhrases(lang).then((p) => setPhrases(lang, p));
+    if (lang !== 'en') void loadPhrasesFor(lang);
   }, [lang]);
 
   // What the screen says, in logcat too (ReactNativeJS), so a tester can follow it.
@@ -156,10 +164,23 @@ export default function App() {
     saveLang(next);
     langRef.current = next;
     setLangState(next);
+    if (next !== 'en') void loadPhrasesFor(next); // before the announcement asks for its clip
     if (announce) {
       setMessage(LANG_LABELS[next]);
-      say(`Language: ${LANG_NAMES[next]}.`);
+      // Amharic: "Okay, I will speak Amharic now." as its MMS clip (English only if it cannot play).
+      if (next === 'en') say(`Language: ${LANG_NAMES[next]}.`);
+      else sayPrompt('languageChosen', next, false, `Language: ${LANG_NAMES[next]}.`);
     }
+  }
+
+  /** GET /phrases for `l` (one request per language), kept for sayPrompt. */
+  function loadPhrasesFor(l: Lang) {
+    const loading = fetchPhrases(l).then((p) => {
+      setPhrases(l, p);
+      return p;
+    });
+    trackPhrases(l, loading);
+    return loading;
   }
 
   // Speak it, and show it for anyone helping the user.
@@ -486,7 +507,7 @@ export default function App() {
   }
 
   function assistState(cameraOpen: boolean): AssistState {
-    return { ...convo.current, camera_open: cameraOpen };
+    return { ...convo.current, camera_open: cameraOpen, audio_log: recentAudioLog() };
   }
 
   /** A voice (or typed) command while the camera is open: take it, stop, switch language... */
@@ -616,7 +637,9 @@ export default function App() {
     if (!welcomed.current) {
       welcomed.current = true;
       // Give the Amharic phrase clips a moment to arrive.
-      setTimeout(() => {
+      // Let "Okay, I will speak Amharic now." finish first.
+      setTimeout(async () => {
+        await whenQuiet(10_000);
         announcePrompt('greeting');
         void listenSoon('greeting');
       }, current() === 'en' ? 300 : 1500);

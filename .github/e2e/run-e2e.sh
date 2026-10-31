@@ -7,7 +7,8 @@
 #   3. a typed turn (birr://assist?text=count my money): /assist says scan -> live guidance posts
 #      small frames to POST /frame -> the photo goes to POST /scan -> GET /scan/{id} -> answer
 #   4. hold the screen and let go (the other way to talk): POST /assist -> 200
-#   5. "speak Amharic" (typed turn): action set_lang, the pill says አማርኛ; a tap-to-talk turn is
+#   5. "speak Amharic" (typed turn): action set_lang, its Amharic clip starts ('[birr] clip started',
+#      no 'clip did not start' / 'clip failed' anywhere in the run), the pill says አማርኛ; a tap-to-talk turn is
 #      sent with lang=am and the app stays in Amharic; an Amharic scan turn runs in Amharic
 #   6. relaunch: the language is remembered (no language question, lang am)
 # The emulator microphone hears silence, so spoken turns are proven by the 200 round trip (the
@@ -284,6 +285,14 @@ SINCE=$(jslines)
 link_turn "please speak Amharic"
 if wait_js '\[birr\] POST /assist .*action=set_lang lang=am' 60 "$SINCE"; then log "assist switched to Amharic"; else fail "speak Amharic: no set_lang to am"; fi
 wait_js '\[birr\] lang: am' 10 "$SINCE" || fail "the app did not switch to Amharic"
+# The Amharic confirmation is an MMS clip: it must start (from a downloaded file), never fall
+# back to the English phone voice.
+if wait_js '\[birr\] clip started' 30 "$SINCE"; then
+  log "Amharic clip: $(tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] clip started.*' | head -1)"
+else
+  fail "Amharic: the set_lang answer clip never started"
+fi
+if tail -n +"$SINCE" "$JSLOG" | grep -qE 'clip did not start|clip failed'; then fail "Amharic: a clip did not start after switching"; fi
 wait_js 'listen: auto \(reply' 40 "$SINCE" || fail "hands-free: no listening after the language reply"
 sleep 12 # the confirmation clip plays; the phrase clips download
 dismiss_dialogs
@@ -334,6 +343,7 @@ tail -n +"$SINCE" "$JSLOG" | grep -q 'choose a language' && fail "relaunch: aske
 tail -n +"$SINCE" "$JSLOG" | grep -q '\[birr\] lang: am' || fail "relaunch: language not remembered (expected am)"
 shot 09-relaunch
 
+grep -qE 'clip did not start|clip failed' "$JSLOG" && fail "a clip did not start somewhere in the run: $(grep -oE '\[birr\] clip (did not start|failed).*' "$JSLOG" | head -3)"
 grep -qE '\[birr\] lang: om|Afaan Oromoo' "$JSLOG" "$OUT"/*.txt 2>/dev/null && fail "Oromo was selected or shown"
 
 sleep 2
