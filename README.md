@@ -4,7 +4,7 @@
 
 A voice-first assistant that helps blind and low-vision people handle Ethiopian cash. Ask "How much do I have?" or "I paid 500 for something that costs 320". Muse Spark Open reads every note, the backend adds the total in code, and the answer is spoken in Amharic, Afaan Oromo or English. When it is unsure, it asks for a rescan instead of guessing.
 
-Built during the Meta Global AI Developer Hackathon (Oct 26 – Nov 4, 2026). The app–backend contract is `docs/api.md`, and the design is `docs/architecture.md`.
+Built with Muse Spark Open, during the Meta Global AI Developer Hackathon (Oct 26 – Nov 4, 2026). The app–backend contract is `docs/api.md`, and the design is `docs/architecture.md`.
 
 ## How it works
 
@@ -57,9 +57,44 @@ Each `/scan` and `/intent` call writes one JSON trace to `TRACE_DIR`. Traces hol
 
 An Expo (React Native) app in `app/`, Android first. Tap anywhere to count; hold the screen, or tap **Ask**, to ask by voice. See `app/README.md` to run it on a phone with Expo Go. It includes a demo mode that needs no backend.
 
+## Results
+
+Zero wrong spoken totals is the design goal. It is not the result yet.
+
+We ran the live reader (Muse Spark Open, two reads, `MUSE_ONLY_TOTALS=1`, SAM off) over 37 photos of real piles, three scans each, so 111 scans per run.
+
+| Run | Exact total | Wrong total | No total (rescan) |
+|---|---|---|---|
+| Normal run | 80 | 1 | 30 |
+| Baseten slow that day | 60 | 1 | 50 |
+
+Both wrong totals came from the same photo, L04: the app said 465 for a pile of 365, and both reads agreed on an extra 100 note, so the agreement check let it through. When Baseten is slow, more scans run out of time and end as a rescan rather than a wrong total.
+
+So the live app gave 1 wrong total in 111 scans. A user should still treat a spoken total as a strong hint, not a guarantee.
+
 ## What we tried
 
 Our design rule is zero wrong spoken totals. A blind user cannot check a wrong number, so when the reader is not sure, the app asks for a rescan rather than guess. Every experiment below was judged against that rule first and exact reads second.
+
+| Experiment | Result | Kept? |
+|---|---|---|
+| SAM 3.1 per-note crops, each crop read by Muse | 5 of 8 exact and 2 wrong on the dev set, against 7 of 8 for Muse on the whole photo | No |
+| Reader prompt v3.1 | 69 exact against 80, over the same 111 scans, 1 wrong each | No (PR #14 closed) |
+| Recount when a value repeats | 52 exact, 0 wrong, 59 no total, against 60, 1, 50 live. It blocked 8 correct totals and caught no wrong one | No (PR #23 closed) |
+| Muse Glimmer 30B fine-tune (QLoRA, Kaggle) | v1 3 wrong of 8. v2 on 24 piles 8 exact, 15 rescan, 1 wrong | Stopped |
+| Our own YOLO and DETR note detector | 3 of 29 totals exact on real piles | Not integrated |
+
+### SAM 3.1 per-note crops
+
+SAM 3.1 cut each note out of the photo and Muse read each crop on its own. On the 8-photo dev set this gave 5 exact totals and 2 wrong ones, while Muse on the whole photo got 7 exact. We kept the whole-photo read.
+
+### Reader prompt v3.1
+
+A reworded reader prompt that had spoken no wrong total on 9 lab photos. Over the same 111 scans it spoke 69 exact totals against 80 for the live prompt, with 1 wrong total each. Fewer totals for the same number of errors, so PR #14 was closed.
+
+### Recount when a value repeats
+
+Built for the L04 error. When the agreed note list repeats a value, one narrow extra Muse call counts the notes of that value, and the total is spoken only if the counts match. It gave 52 exact, 0 wrong and 59 no total, against 60, 1 and 50 for the live run that day. It blocked 8 correct totals and caught no wrong total, so its zero wrong is not evidence that it works. PR #23 was closed.
 
 ### Our own note detector (Oct 30)
 

@@ -6,14 +6,14 @@ Every open-source dependency, model or service we build on is listed here, as th
 
 | Component | License or terms | Used for |
 |---|---|---|
-| Muse Spark Open (`meta-models/muse-spark-open-1026`) on Baseten | Meta's license for the model, and Baseten's terms of service. Used through the API; we distribute no weights | reading every note |
+| Muse Spark Open (`meta-models/muse-spark-open-1026`) on Baseten | [Muse Model License](https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B/blob/main/LICENSE.md) (Meta, Oct 15, 2026) with its Usage Policy, and Baseten's terms of service. We use it through Baseten's API and distribute no weights. The license asks every product that uses it to say "Built with Muse Spark Open", which the README does | reading every note, and turning the spoken question into an intent |
 | Muse Spark 1.3 through the Cline API (optional, off by default) | Cline's terms of service | fallback reader for slow scans |
 | SAM 3 and SAM 3.1 (`facebookresearch/sam3` code, `facebook/sam3` and `facebook/sam3.1` weights) | SAM License (Meta, last updated Nov 19, 2025). It covers both code and weights | `modal_sam/` (optional), pinned to commit `f1647e8`. Weights download at runtime from gated Hugging Face repos; none are in this repo |
 | Roboflow serverless SAM 3 (optional) | Roboflow's terms of service | hosted SAM 3 (`SAM_PROVIDER=roboflow`) |
 | Modal (optional) | Modal's terms of service | GPU hosting for `modal_sam/` |
-| Meta Omnilingual ASR: `omniASR_CTC_300M_v2` (`omnilingual-asr`, with fairseq2) | Apache 2.0 | hearing the spoken question, in the local service `asr_service/`. Weights download at runtime; none are in this repo |
+| Meta Omnilingual ASR: `omniASR_CTC_300M_v2` (`omnilingual-asr`, with fairseq2) | Apache 2.0, for both code and models ([LICENSE](https://github.com/facebookresearch/omnilingual-asr/blob/main/LICENSE), [README](https://github.com/facebookresearch/omnilingual-asr#license)) | hearing the spoken question, in the local service `asr_service/`. Weights download at runtime; none are in this repo |
 | Gemini API: `gemini-3.8-flash` (fallback only) | Google's Gemini API terms | hearing the spoken question when `ASR_URL` is not set |
-| Meta MMS-TTS: `facebook/mms-tts-amh`, `facebook/mms-tts-orm` | CC-BY-NC 4.0 (non-commercial) | speaking Amharic and Oromo on our server. Weights download at runtime; none are in this repo |
+| Meta MMS-TTS: `facebook/mms-tts-amh`, `facebook/mms-tts-orm` | CC-BY-NC 4.0, non-commercial ([model card](https://huggingface.co/facebook/mms-tts-amh)) | speaking Amharic and Oromo on our server. Weights download at runtime; none are in this repo |
 
 ## Backend (Python)
 
@@ -28,6 +28,23 @@ Every open-source dependency, model or service we build on is listed here, as th
 | Uvicorn | ≥ 0.30 | BSD-3-Clause | the server |
 | pytest | dev only | MIT | tests |
 | ruff | dev only | MIT | lint and format |
+
+## ASR service (`asr_service/`, its own Python environment, not a backend dependency)
+
+Installed on the server by `asr_service/install.sh`. None of these packages are in this repo.
+
+| Component | License | Used for |
+|---|---|---|
+| omnilingual-asr | Apache-2.0 ([LICENSE](https://github.com/facebookresearch/omnilingual-asr/blob/main/LICENSE)) | the ASR model and its inference pipeline |
+| fairseq2, fairseq2n | MIT ([fairseq2](https://github.com/facebookresearch/fairseq2#license)) | the toolkit omnilingual-asr runs on |
+| PyTorch (CPU), torchaudio | BSD-3-Clause (PyTorch), BSD-2-Clause ([torchaudio](https://github.com/pytorch/audio/blob/main/LICENSE)) | running the model |
+| PyAV (`av`) | BSD-3-Clause ([PyAV](https://github.com/PyAV-Org/PyAV)). Its binary wheels bundle FFmpeg, which reports itself as LGPL version 3 or later, plus other libraries built by [pyav-ffmpeg](https://github.com/PyAV-Org/pyav-ffmpeg), among them x264 and x265 (GPL-2.0 or later) | decoding the phone's m4a, webm or wav to 16 kHz audio |
+| soundfile | BSD-3-Clause. Its wheels bundle libsndfile, which is LGPL ([license notes](https://github.com/bastibe/python-soundfile/blob/master/licensing/license_notes.md)) | reading audio buffers |
+| NumPy | BSD-3-Clause | audio arrays |
+| PyArrow | Apache-2.0 | a pinned dependency of omnilingual-asr |
+| FastAPI, Uvicorn | MIT, BSD-3-Clause | the local endpoint |
+
+We install these wheels on our own server and do not redistribute them. We only decode audio with FFmpeg; we never encode video.
 
 ## SAM service on Modal (`modal_sam/`, built in Modal's image, not a backend dependency)
 
@@ -46,8 +63,8 @@ Every open-source dependency, model or service we build on is listed here, as th
 
 | Component | Version | License | Used for |
 |---|---|---|---|
-| Expo SDK (expo, expo-camera, expo-speech, expo-haptics, expo-image-manipulator, expo-file-system, expo-status-bar, expo-image-picker, expo-audio, expo-splash-screen) | 58 | MIT | camera, speech, vibration, photo resize, upload, photo picker, voice recording and playback, splash screen |
-| React Native | 0.88 | MIT | the app |
+| Expo SDK (expo, expo-camera, expo-speech, expo-haptics, expo-image-manipulator, expo-file-system, expo-status-bar, expo-image-picker, expo-audio, expo-splash-screen) | 58 | MIT ([expo/expo](https://github.com/expo/expo/blob/main/LICENSE)) | camera, speech, vibration, photo resize, upload, photo picker, voice recording and playback, splash screen |
+| React Native | 0.88 | MIT ([facebook/react-native](https://github.com/facebook/react-native/blob/main/LICENSE)) | the app |
 | React, React DOM | 19.3 | MIT | the app |
 | react-native-web | 0.21 | MIT | web preview of the app |
 | TypeScript | dev only | Apache-2.0 | app type checking |
