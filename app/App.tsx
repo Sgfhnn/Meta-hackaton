@@ -62,6 +62,7 @@ export default function App() {
   const welcomed = useRef(false);
   const changeFor = useRef<ChangeCheck | null>(null);
   const holding = useRef(false); // recording while the screen is held (let go = send)
+  const starting = useRef(false); // the recorder is still starting (slow phones: seconds)
   const guideStop = useRef<'tapped' | 'cancelled' | null>(null);
   const lastAnswer = useRef<LastAnswer | null>(null);
   const convo = useRef<AssistState>({ last_total: null, last_notes: [], pending_paid: null, pending_price: null });
@@ -311,11 +312,16 @@ export default function App() {
     stopSpeaking();
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setMessage(promptText('listening', current()));
-    await question.start();
+    starting.current = true;
+    try {
+      await question.start();
+    } finally {
+      starting.current = false;
+    }
   }
 
   function onScreenPress() {
-    if (question.listening) {
+    if (question.listening || starting.current) {
       void question.stop();
       return;
     }
@@ -352,7 +358,12 @@ export default function App() {
     let next: (() => Promise<void>) | null = null;
     try {
       if (!assistMissing.current) {
-        const result = await assist(input, current(), SESSION_ID, convo.current, ASSIST_TIMEOUT_MS);
+        let result = await assist(input, current(), SESSION_ID, convo.current, ASSIST_TIMEOUT_MS);
+        // A recogniser or Muse hiccup (502): send the same turn once more before saying sorry.
+        if (result.kind === 'error' && result.body.error === 'upstream_error') {
+          console.log('[birr] /assist upstream error, retrying once');
+          result = await assist(input, current(), SESSION_ID, convo.current, ASSIST_TIMEOUT_MS);
+        }
         if (result.kind === 'missing') assistMissing.current = true;
         else {
           next = handleAssist(result);

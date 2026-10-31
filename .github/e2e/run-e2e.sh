@@ -76,9 +76,13 @@ link_turn() {
   enc=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1")
   adb shell "am start -W -a android.intent.action.VIEW -d 'birr://assist?text=$enc' $PKG" >/dev/null
 }
-# Tap, wait $1 s, tap again: one tap-to-talk turn.
+# Tap, speak for $1 s once the recorder runs (the CI emulator takes seconds to start it; a tap
+# before that cancels the turn), tap again: one tap-to-talk turn.
 tap_talk() {
+  local mark
+  mark=$(jslines)
   adb shell input tap $((W / 2)) $((H * 4 / 10))
+  wait_js 'recording started' 25 "$mark" || log "recorder start not logged within 25 s"
   sleep "$1"
   adb shell input tap $((W / 2)) $((H * 4 / 10))
 }
@@ -165,7 +169,7 @@ grep -q 'content-desc="Ask a question"' "$OUT/02-greeting.xml" 2>/dev/null && fa
 log "tap to talk: tap, 4 s, tap"
 dismiss_dialogs
 SINCE=$(jslines)
-tap_talk 4
+tap_talk 2
 if wait_js '\[birr\] POST /assist|/assist failed' 60 "$SINCE"; then log "assist turn finished"; else fail "POST /assist never answered (or never sent)"; fi
 sleep 4
 shot 03-talk
@@ -222,7 +226,7 @@ grep -q 'አማርኛ' "$OUT/06-amharic.txt" || fail "language pill does not say
 
 log "tap to talk in Amharic"
 SINCE=$(jslines)
-tap_talk 4
+tap_talk 2
 if wait_js '\[birr\] POST /assist|/assist failed' 60 "$SINCE"; then log "Amharic assist turn finished"; else fail "Amharic: POST /assist never answered"; fi
 sleep 8
 tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] POST /assist.*' | tee "$OUT/amharic-talk-request.txt"
