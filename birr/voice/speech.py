@@ -79,6 +79,7 @@ PRICE_OVER_PAID = (
 )
 BAD_AUDIO = "Sorry, I couldn't use that recording. Please ask again."
 NOT_HEARD = "Sorry, I couldn't hear that. Please try again."
+RATE_LIMITED = "Too many requests in a short time. Please wait a few minutes and try again."
 
 
 def change_prompt(paid: int, price: int) -> str:
@@ -93,6 +94,7 @@ def change_prompt(paid: int, price: int) -> str:
 FIXED = [
     RESCAN, NO_NOTES, GIVE_UP, TRY_AGAIN, TOO_SLOW, SLOW_RESCAN, STILL_COUNTING, BAD_REQUEST,
     NEED_PRICE, VOICE_TODO, COUNT_PROMPT, INTENT_UNKNOWN, PRICE_OVER_PAID, BAD_AUDIO, NOT_HEARD,
+    RATE_LIMITED,
 ]  # fmt: skip
 
 # The app's own prompts (app/src/voice.ts PROMPTS, same keys and English). GET /phrases returns

@@ -31,6 +31,8 @@ uv run uvicorn birr.api:app --port 8000   # one worker: scan jobs live in the pr
 - `GET /phrases?lang=am` returns the app's own prompts, translated, with clip links.
 - `GET /health` reports `refs`, the SAM provider, and whether voice is on.
 
+`POST /scan` and `POST /intent` are limited per caller (`RATE_LIMIT_PER_HOUR`, default 60; localhost exempt), because the backend URL is public and every scan spends model credit.
+
 Each `/scan` and `/intent` call writes one JSON trace to `TRACE_DIR`. Traces hold no images, audio or transcripts.
 
 ### SAM providers

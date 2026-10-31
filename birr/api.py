@@ -24,6 +24,7 @@ from birr.agent.trace import new_trace_id, write_trace
 from birr.config import get_settings
 from birr.image import BadImage, prepare_jpeg
 from birr.jobs import JobStore
+from birr.ratelimit import RateLimiter, client_key
 from birr.read import muse
 from birr.scan import ScanRequest
 from birr.voice import asr, gemini, mms, understand
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.http = httpx.AsyncClient(timeout=settings.scan_deadline_s)
     app.state.jobs = JobStore()
+    app.state.limiter = RateLimiter()
     app.state.voice = Voice(settings)
     warm = asyncio.create_task(_warm(app.state.voice))
     yield
@@ -112,8 +114,16 @@ async def _validation_error(request: Request, exc: RequestValidationError):
     return _error(400, "bad_request", say.BAD_REQUEST)
 
 
+def _limited(request: Request, settings, lang: str):
+    """A 429 answer once this caller made RATE_LIMIT_PER_HOUR requests in the last hour."""
+    if app.state.limiter.allow(client_key(request), settings.rate_limit_per_hour):
+        return None
+    return _error(429, "rate_limited", say.RATE_LIMITED, lang if lang in LANGS else "en")
+
+
 @app.post("/scan")
 async def scan(
+    request: Request,
     image: Annotated[UploadFile, File()],
     intent: Annotated[str, Form()],
     lang: Annotated[str, Form()] = "en",
@@ -125,6 +135,8 @@ async def scan(
 ):
     """Validate, then start a scan job. Returns 202 + job_id (or the result when wait=true)."""
     settings = get_settings()
+    if limited := _limited(request, settings, lang):
+        return limited
     trace_id = new_trace_id()
     lang = lang if lang in ("en", "am", "om") else "en"
     trace: dict = {
@@ -195,6 +207,7 @@ async def scan_status(job_id: str):
 
 @app.post("/intent")
 async def intent(
+    request: Request,
     audio: Annotated[UploadFile, File()],
     lang: Annotated[str, Form()] = "en",
 ):
@@ -202,6 +215,8 @@ async def intent(
     it and Muse turns the transcript into the intent (Gemini only when ASR_URL is not set).
     Neither the audio nor the transcript is kept."""
     settings = get_settings()
+    if limited := _limited(request, settings, lang):
+        return limited
     voice: Voice = app.state.voice
     trace_id = new_trace_id()
     hint = lang if lang in LANGS else "en"

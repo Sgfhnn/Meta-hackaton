@@ -246,6 +246,7 @@ def voice_client(voice_env, monkeypatch):
     """A client with Gemini 'configured' and a fake MMS voice."""
     monkeypatch.setenv("TRACE_DIR", str(voice_env))
     monkeypatch.delenv("MUSE_ONLY_TOTALS", raising=False)
+    monkeypatch.setenv("RATE_LIMIT_PER_HOUR", "0")
     engine = FakeMms()
     real_init = Voice.__init__
 

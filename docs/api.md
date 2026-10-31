@@ -157,6 +157,7 @@ Any non-200 response (and any `error` job) carries spoken text, so the user alwa
 | 400 | `bad_request`: missing field, unsupported file type, or image too large |
 | 404 | `not_found`: unknown or expired `job_id` on `GET /scan/{job_id}` |
 | 404 | `not_found` on `GET /speak/{clip_id}`: a clip id this backend never handed out |
+| 429 | `rate_limited`: one caller made more than `RATE_LIMIT_PER_HOUR` (default 60) `POST /scan` + `POST /intent` requests in the last hour. Polling and localhost are never limited; behind the box's proxy the caller is the last `X-Forwarded-For` address |
 | 501 | `not_implemented`: `POST /intent` with neither `ASR_URL` nor `GEMINI_API_KEY` |
 | 502 | `upstream_error`: every Muse read failed (as the `error` of a job, or directly with `wait=true`), or the recogniser, Muse or Gemini failed on `/intent`, or MMS failed on `/speak`. SAM failing alone is not an error: the outcome is `rescan` |
 

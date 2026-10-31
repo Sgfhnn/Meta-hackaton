@@ -24,6 +24,7 @@ AM = {
         "PRICE_OVER_PAID": "የነገሩኝ ዋጋ ከከፈሉት ይበልጣል። የከፈሉትንና ዋጋውን እንደገና ይንገሩኝ።",
         "BAD_AUDIO": "ይቅርታ፣ ያንን ቅጂ መጠቀም አልቻልኩም። እባክዎ እንደገና ይጠይቁ።",
         "NOT_HEARD": "ይቅርታ፣ አልሰማሁዎትም። እባክዎ እንደገና ይሞክሩ።",
+        "RATE_LIMITED": "በአጭር ጊዜ ውስጥ ብዙ ጥያቄዎች ቀርበዋል። እባክዎ ጥቂት ደቂቃዎች ጠብቀው እንደገና ይሞክሩ።",
     },
     "app": {
         "counting": "እየቆጠርኩ ነው።",
@@ -94,6 +95,7 @@ OM = {
         " deebi'ii natti himi.",
         "BAD_AUDIO": "Dhiifama, sagalee sana fayyadamuu hin dandeenye. Irra deebi'ii gaafadhu.",
         "NOT_HEARD": "Dhiifama, si hin dhageenye. Irra deebi'ii yaali.",
+        "RATE_LIMITED": "Yeroo gabaabaa keessatti gaaffiin baay'een dhiyaateera. Maaloo daqiiqaa muraasa eegiitii irra deebi'ii yaali.",
     },
     "app": {
         "counting": "Lakkaa'aan jira.",

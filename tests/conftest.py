@@ -29,6 +29,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.delenv("MUSE_ONLY_TOTALS", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)  # /intent answers 501 unless a test sets it
     monkeypatch.setenv("TTS_ENGINE", "off")  # never load MMS in tests, even where it is installed
+    monkeypatch.setenv("RATE_LIMIT_PER_HOUR", "0")  # tests/test_rate_limit.py turns it on
     with TestClient(api.app) as c:
         c.trace_dir = tmp_path
         yield c

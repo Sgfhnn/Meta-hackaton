@@ -69,6 +69,11 @@ class Settings:
     sam_modal_timeout_s: float = field(
         default_factory=lambda: float(os.getenv("SAM_MODAL_TIMEOUT_S", "25"))
     )
+    # Requests per hour per client address on POST /scan and POST /intent (0 = no limit).
+    # Localhost is exempt. The backend URL is public once the APK is out.
+    rate_limit_per_hour: int = field(
+        default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_HOUR", "60"))
+    )
     max_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     )
