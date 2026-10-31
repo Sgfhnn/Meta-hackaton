@@ -8,7 +8,7 @@ Built during the Meta Global AI Developer Hackathon (Oct 26 – Nov 4, 2026). Th
 
 ## How it works
 
-1. **Ask (optional).** The user holds the screen and speaks. Gemini hears the question and returns the intent: count the money, or check the change (with the amounts paid and the price).
+1. **Ask (optional).** The user holds the screen and speaks. Meta Omnilingual ASR writes down the question on our own server, and Muse turns it into the intent: count the money, or check the change (with the amounts paid and the price).
 2. **Photo.** A tap photographs the notes. The app caps the photo at 2048 px and strips EXIF.
 3. **Two reads.** Two Muse Spark Open reads run in parallel: one plain, and one with reference sheets of every note. A total is spoken only when both list the same notes and none is unclear. Otherwise the user is guided to rescan.
 4. **Count check (optional).** SAM counts note regions as a cross-check (`SAM_PROVIDER`, below).
@@ -45,9 +45,9 @@ Each `/scan` and `/intent` call writes one JSON trace to `TRACE_DIR`. Traces hol
 
 ### Voice
 
-- **Hearing the question:** Gemini (`gemini-3.8-flash`, with a JSON schema) turns the recorded question into an intent and amounts. Set `GEMINI_API_KEY`; it stays on the backend, and the app never sees it. Without it, `/intent` answers 501 and the app counts by tap.
+- **Hearing the question:** Meta Omnilingual ASR (`omniASR_CTC_300M_v2`, Apache 2.0) runs as a small local service on the box (`asr_service/`, its own Python environment, contract in `docs/api.md` §1.2); set `ASR_URL` to it. Muse Spark Open then turns the transcript into the intent and amounts, which code checks and the app reads back before scanning. Without `ASR_URL`, Gemini (`GEMINI_API_KEY`) is the fallback; with neither, `/intent` answers 501 and the app counts by tap.
 - **Answers in Amharic and Oromo:** fixed templates in `birr/voice/templates.py`, filled in by code (`birr/voice/localize.py`). No model translates, so nothing can change an amount. The templates are drafts until a native speaker checks them.
-- **Speaking them:** Meta MMS-TTS (`facebook/mms-tts-amh`, `facebook/mms-tts-orm`) on the CPU. Numbers become words in code (`birr/voice/numbers.py`), because the model reads no digits. Install it with `uv sync --extra tts` (CPU PyTorch, transformers and uroman, about 1 GB), and start the server with `uv run --extra tts uvicorn birr.api:app --port 8000` so the next sync keeps it. Loading takes about 8 s per language. At startup the fixed phrases' clips are made in the background (about a minute of CPU). After that, a short sentence takes about 1 s, and a total plus a change check about 3 s. Clips are cached in `VOICE_CACHE_DIR`. `TTS_ENGINE=off` gives text only, and the app then speaks with the phone's voice.
+- **Speaking them:** Meta MMS-TTS (`facebook/mms-tts-amh`, `facebook/mms-tts-orm`) on the CPU. Numbers become words in code (`birr/voice/numbers.py`), because the model reads no digits. Amharic is spoken by default; the MMS Oromo voice tested poorly, so Oromo answers stay text until a native speaker approves it (`TTS_LANGS=am,om`). Install it with `uv sync --extra tts` (CPU PyTorch, transformers and uroman, about 1 GB), and start the server with `uv run --extra tts uvicorn birr.api:app --port 8000` so the next sync keeps it. Loading takes about 8 s per language. At startup the fixed phrases' clips are made in the background (about a minute of CPU). After that, a short sentence takes about 1 s, and a total plus a change check about 3 s. Clips are cached in `VOICE_CACHE_DIR`. `TTS_ENGINE=off` gives text only, and the app then speaks with the phone's voice.
 
 ### Tests
 
@@ -78,8 +78,8 @@ One wrong total fails the zero-wrong rule, so Muse Spark Open (`muse-spark-open-
 
 ## Disclosures
 
-- **Models and services.** Muse Spark Open (Meta) on Baseten reads the notes. Muse Spark 1.3 through the Cline API is an optional fallback reader and is off by default. Gemini (Google) only hears the spoken question; it never reads notes, computes totals or speaks. Meta MMS-TTS speaks Amharic and Oromo on our own server (non-commercial license, CC-BY-NC 4.0). SAM 3 runs on Roboflow, or SAM 3.1 or SAM 3 runs on Modal, both optional. Each provider processes what we send under its own terms.
-- **Data.** The backend stores no photos and no recordings, only traces with labels and timings. The app strips EXIF, including GPS. Voice questions go to Gemini to be understood, and neither the audio nor the transcript is kept. The voice cache holds only text the backend wrote and its audio.
+- **Models and services.** Muse Spark Open (Meta) on Baseten reads the notes and turns the spoken question into an intent. Muse Spark 1.3 through the Cline API is an optional fallback reader and is off by default. Meta Omnilingual ASR writes down the spoken question on our own server, and Meta MMS-TTS speaks Amharic and Oromo there too (MMS has a non-commercial license, CC-BY-NC 4.0). Gemini (Google) is only a fallback for the spoken question; it never reads notes, computes totals or speaks. SAM 3 runs on Roboflow, or SAM 3.1 or SAM 3 runs on Modal, both optional. Each provider processes what we send under its own terms.
+- **Data.** The backend stores no photos and no recordings, only traces with labels and timings. The app strips EXIF, including GPS. Voice questions are transcribed on our own server, and neither the audio nor the transcript is kept. The voice cache holds only text the backend wrote and its audio.
 - **Pre-event material.** Photos taken before the event were used only for development and testing. They, and the reference sheets made from them, are not in this repo.
 - **Amharic and Oromo.** The sentences are fixed templates, drafted with AI help. Code fills in every number. A native speaker has not reviewed the wording or the MMS voices yet. This project uses the universal romanizer software 'uroman' written by Ulf Hermjakob, USC Information Sciences Institute (2015-2020).
 - **Limits.** Birr notes of 5, 10, 50, 100 and 200 only. It does not detect counterfeits.

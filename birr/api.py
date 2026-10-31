@@ -26,7 +26,7 @@ from birr.image import BadImage, prepare_jpeg
 from birr.jobs import JobStore
 from birr.read import muse
 from birr.scan import ScanRequest
-from birr.voice import gemini, mms
+from birr.voice import asr, gemini, mms, understand
 from birr.voice import speech as say
 from birr.voice.service import LANGS, TRANSLATED, Voice
 
@@ -87,6 +87,13 @@ def _speech(text: str, lang: str) -> dict:
 def _error(status: int, error: str, text: str, lang: str = "en", trace_id: str | None = None):
     body = {"error": error, **_speech(text, lang), "trace_id": trace_id}
     return JSONResponse(status_code=status, content=body)
+
+
+def hears(settings) -> str:
+    """Which engine hears voice questions: omnilingual (ASR_URL set), gemini (key set) or off."""
+    if settings.asr_url:
+        return "omnilingual"
+    return "gemini" if settings.gemini_key else "off"
 
 
 async def _in_language(work, lang: str) -> tuple[int, dict]:
@@ -191,8 +198,9 @@ async def intent(
     audio: Annotated[UploadFile, File()],
     lang: Annotated[str, Form()] = "en",
 ):
-    """A spoken question -> what to do next (docs/api.md section 1). Gemini hears it; Muse is
-    not used for audio. Neither the audio nor the transcript is kept."""
+    """A spoken question -> what to do next (docs/api.md section 1). Meta Omnilingual ASR hears
+    it and Muse turns the transcript into the intent (Gemini only when ASR_URL is not set).
+    Neither the audio nor the transcript is kept."""
     settings = get_settings()
     voice: Voice = app.state.voice
     trace_id = new_trace_id()
@@ -206,16 +214,31 @@ async def intent(
         write_trace(settings.trace_dir, trace_id, trace)
         return _error(status, error, text, hint, trace_id)
 
-    if not settings.gemini_key:
-        return fail(501, "not_implemented", say.VOICE_TODO, "GEMINI_API_KEY is not set")
+    engine = hears(settings)
+    trace["engine"] = engine
+    if engine == "off":
+        return fail(501, "not_implemented", say.VOICE_TODO, "neither ASR_URL nor GEMINI_API_KEY")
     raw = await audio.read(settings.max_audio_bytes + 1)
     mime = gemini.audio_mime(audio.filename, audio.content_type)
     trace["inputs"].update(audio_bytes=len(raw), mime=mime)
     if not raw or len(raw) > settings.max_audio_bytes or mime is None:
         return fail(400, "bad_request", say.BAD_AUDIO, "audio missing, too large or not audio")
+    timing: dict = {}
     try:
-        heard = await gemini.understand(app.state.http, raw, mime, settings)
-    except gemini.GeminiError as exc:
+        if engine == "omnilingual":
+            t = time.perf_counter()
+            transcript = await asr.transcribe(app.state.http, raw, mime, hint, settings)
+            timing["asr"] = int((time.perf_counter() - t) * 1000)
+            trace["heard_chars"] = len(transcript)  # never the words themselves
+            t = time.perf_counter()
+            if transcript:
+                heard = await understand.from_text(app.state.http, transcript, settings)
+            else:
+                heard = {"lang": None, "intent": "silent", "paid": None, "price": None}
+            timing["intent"] = int((time.perf_counter() - t) * 1000)
+        else:
+            heard = await gemini.understand(app.state.http, raw, mime, settings)
+    except (asr.AsrError, understand.UnderstandError, gemini.GeminiError) as exc:
         return fail(502, "upstream_error", say.NOT_HEARD, str(exc))
 
     spoken_lang = heard["lang"] or hint
@@ -230,6 +253,8 @@ async def intent(
         text, step = say.PRICE_OVER_PAID, "ask"
     elif kind == "change":
         text, step = say.change_prompt(paid, price), "scan" if paid > price else "done"
+    elif kind == "silent":  # the recogniser heard nothing
+        kind, text, step = "unknown", say.NOT_HEARD, "ask"
     else:
         text, step = say.INTENT_UNKNOWN, "ask"
     try:
@@ -237,10 +262,10 @@ async def intent(
     except Exception:  # noqa: BLE001 - the intent still stands; speak it in English
         log.exception("could not localize an intent answer")
         speech = {"speech": {"en": text}}
-    ms = int((time.perf_counter() - started) * 1000)
+    timing["total"] = int((time.perf_counter() - started) * 1000)
     trace.update(
         outcome=kind, next=step, lang=spoken_lang, paid=paid, price=price, speech_en=text,
-        timing_ms={"total": ms},
+        timing_ms=timing,
     )  # fmt: skip
     write_trace(settings.trace_dir, trace_id, trace)
     return {
@@ -285,9 +310,9 @@ async def phrases(lang: str = "en"):
 async def health():
     # refs: read B's reference sheets are loaded; without them no scan can speak a total.
     # sam: which SAM provider counts the notes (roboflow, modal or off).
-    # voice.intent: POST /intent works (Gemini key set). voice.translates: answers come in Amharic
-    # and Oromo (fixed templates, always on). voice.tts / speaks: Meta MMS clips, and in which
-    # languages. voice.gemini repeats voice.intent for older app builds.
+    # voice.hears: which engine hears questions (omnilingual, gemini or off); voice.intent: POST
+    # /intent works. voice.translates: answers come in Amharic and Oromo (fixed templates, always
+    # on). voice.tts / speaks: Meta MMS clips, and in which languages.
     settings = get_settings()
     voice: Voice = app.state.voice
     return {
@@ -295,8 +320,8 @@ async def health():
         "refs": muse.load_refs(settings.refs_dir) is not None,
         "sam": settings.sam_provider,
         "voice": {
-            "intent": bool(settings.gemini_key),
-            "gemini": bool(settings.gemini_key),
+            "hears": hears(settings),
+            "intent": hears(settings) != "off",
             "translates": True,
             "tts": voice.tts,
             "speaks": [lang for lang in TRANSLATED if voice.speaks(lang)],

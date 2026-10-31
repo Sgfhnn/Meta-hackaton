@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from birr import api
 from birr.config import Settings
-from birr.voice import gemini, localize, mms
+from birr.voice import asr, gemini, localize, mms, understand
 from birr.voice import speech as say
 from birr.voice.service import Voice, numbers_kept
 
@@ -222,7 +222,13 @@ def test_unknown_sentence_stays_english(voice_env):
     assert "speech_todo" in fields and "speech_audio" not in fields
 
 
-def test_warm_loads_voices_and_makes_fixed_clips(voice_env):
+def test_oromo_voice_is_off_by_default(voice_env):
+    voice = Voice(Settings(), engine=FakeMms())
+    assert voice.speaks("am") and not voice.speaks("om")
+
+
+def test_warm_loads_voices_and_makes_fixed_clips(voice_env, monkeypatch):
+    monkeypatch.setenv("TTS_LANGS", "am,om")
     engine = FakeMms()
     voice = Voice(Settings(), engine=engine)
     run(voice.warm([say.RESCAN, say.STILL_COUNTING]))
@@ -386,15 +392,17 @@ def test_errors_use_templates(voice_client):
     assert r.json()["speech"]["am"] == localize.render(say.BAD_REQUEST, "am")[0]
 
 
-def test_health_reports_voice(voice_client):
+def test_health_reports_voice(voice_client, monkeypatch):
     assert voice_client.get("/health").json()["voice"] == {
-        "intent": True, "gemini": True, "translates": True, "tts": "mms", "speaks": ["am", "om"],
+        "hears": "gemini", "intent": True, "translates": True, "tts": "mms", "speaks": ["am"],
     }  # fmt: skip
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    assert voice_client.get("/health").json()["voice"]["hears"] == "omnilingual"
 
 
-def test_health_without_gemini_or_mms(client):
+def test_health_without_any_voice_engine(client):
     assert client.get("/health").json()["voice"] == {
-        "intent": False, "gemini": False, "translates": True, "tts": "off", "speaks": [],
+        "hears": "off", "intent": False, "translates": True, "tts": "off", "speaks": [],
     }  # fmt: skip
 
 
@@ -408,3 +416,124 @@ def test_a_localize_crash_keeps_the_scan_answer(voice_client, fake, monkeypatch)
     r = post_scan(voice_client, lang="am")
     assert r.status_code == 200
     assert r.json()["speech"]["en"]  # English answer, not a crash
+
+
+# --- Omnilingual ASR + Muse (the default voice path when ASR_URL is set) ---------------------
+
+
+def completion(content: str) -> dict:
+    return {"choices": [{"message": {"role": "assistant", "content": content}}]}
+
+
+def test_asr_request_shape(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002/")
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["type"] = request.headers["content-type"]
+        seen["body"] = request.content
+        return httpx.Response(200, json={"text": "  ሰላም  ", "lang": "amh_Ethi", "ms": 600})
+
+    text = with_mock(handler, lambda c: asr.transcribe(c, SHORT_M4A, "audio/m4a", "am", Settings()))
+    assert text == "ሰላም"
+    assert seen["url"] == "http://127.0.0.1:8002/transcribe?lang=amh_Ethi"
+    assert seen["type"] == "audio/m4a" and seen["body"] == SHORT_M4A
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(500), httpx.Response(200, text="nope"), httpx.Response(200, json={"x": 1})],
+)
+def test_asr_failures_raise(voice_env, monkeypatch, response):
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    with pytest.raises(asr.AsrError):
+        with_mock(
+            lambda request: response,
+            lambda c: asr.transcribe(c, SHORT_M4A, "audio/m4a", "om", Settings()),
+        )
+
+
+def test_muse_intent_request_and_cleaning(voice_env, monkeypatch):
+    monkeypatch.setenv("BASETEN_API_KEY", "test-key")
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["body"] = json.loads(request.content)
+        reply = 'Sure: {"lang": "am", "intent": "change", "paid": 500, "price": "320"}'
+        return httpx.Response(200, json=completion(reply))
+
+    heard = with_mock(handler, lambda c: understand.from_text(c, "አ5 መቶብር ከፍዬ", Settings()))
+    assert heard == {"lang": "am", "intent": "change", "paid": 500, "price": None}  # "320": str
+    assert seen["url"] == "https://inference.baseten.co/v1/chat/completions"
+    body = seen["body"]
+    assert body["model"] == "meta-models/muse-spark-open-1026"
+    assert body["messages"][0]["content"] == understand.PROMPT + "አ5 መቶብር ከፍዬ"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(502), httpx.Response(200, json=completion("no json here"))],
+)
+def test_muse_intent_failures_raise(voice_env, response):
+    with pytest.raises(understand.UnderstandError):
+        with_mock(lambda request: response, lambda c: understand.from_text(c, "hi", Settings()))
+
+
+@pytest.fixture
+def omni_client(voice_client, monkeypatch):
+    """voice_client with ASR_URL set: Omnilingual + Muse hear the question (both faked)."""
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    state = voice_client.state
+    state.update(transcript="birri dhibba shankafalee", muse=None, asr_calls=[])
+
+    async def transcribe(client, audio, mime, lang, settings):
+        state["asr_calls"].append((mime, lang))
+        if isinstance(state["transcript"], Exception):
+            raise state["transcript"]
+        return state["transcript"]
+
+    async def from_text(client, transcript, settings):
+        if isinstance(state["muse"], Exception):
+            raise state["muse"]
+        return state["muse"]
+
+    async def no_gemini(*args):
+        raise AssertionError("Gemini must not be called when ASR_URL is set")
+
+    monkeypatch.setattr(asr, "transcribe", transcribe)
+    monkeypatch.setattr(understand, "from_text", from_text)
+    monkeypatch.setattr(gemini, "understand", no_gemini)
+    return voice_client
+
+
+def test_omnilingual_path(omni_client):
+    omni_client.state["muse"] = heard("change", lang="om", paid=500, price=320)
+    body = post_intent(omni_client, lang="om").json()
+    got = (body["intent"], body["next"], body["paid"], body["price"])
+    assert got == ("change", "scan", 500, 320)
+    assert body["speech"]["om"] == localize.render(say.change_prompt(500, 320), "om")[0]
+    assert "speech_audio" not in body  # Oromo is text only by default
+    assert omni_client.state["asr_calls"] == [("audio/m4a", "om")]
+    trace = json.loads((omni_client.trace_dir / f"{body['trace_id']}.json").read_text())
+    assert trace["engine"] == "omnilingual" and trace["heard_chars"] == 24
+    assert set(trace["timing_ms"]) == {"asr", "intent", "total"}
+    assert "shankafalee" not in json.dumps(trace)  # no transcript in traces
+
+
+def test_nothing_heard_asks_again(omni_client):
+    omni_client.state["transcript"] = ""
+    body = post_intent(omni_client).json()
+    assert (body["intent"], body["next"]) == ("unknown", "ask")
+    assert body["speech"]["en"] == say.NOT_HEARD
+
+
+@pytest.mark.parametrize("failing", ["transcript", "muse"])
+def test_asr_or_muse_failure_is_502(omni_client, failing):
+    omni_client.state["muse"] = heard("count")
+    error = asr.AsrError("down") if failing == "transcript" else understand.UnderstandError("x")
+    omni_client.state[failing] = error
+    r = post_intent(omni_client)
+    assert r.status_code == 502
+    assert r.json()["speech"]["en"] == say.NOT_HEARD

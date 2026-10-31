@@ -11,7 +11,8 @@ Every open-source dependency, model or service we build on is listed here, as th
 | SAM 3 and SAM 3.1 (`facebookresearch/sam3` code, `facebook/sam3` and `facebook/sam3.1` weights) | SAM License (Meta, last updated Nov 19, 2025). It covers both code and weights | `modal_sam/` (optional), pinned to commit `f1647e8`. Weights download at runtime from gated Hugging Face repos; none are in this repo |
 | Roboflow serverless SAM 3 (optional) | Roboflow's terms of service | hosted SAM 3 (`SAM_PROVIDER=roboflow`) |
 | Modal (optional) | Modal's terms of service | GPU hosting for `modal_sam/` |
-| Gemini API: `gemini-3.8-flash` | Google's Gemini API terms | hearing the spoken question (`POST /intent`) |
+| Meta Omnilingual ASR: `omniASR_CTC_300M_v2` (`omnilingual-asr`, with fairseq2) | Apache 2.0 | hearing the spoken question, in the local service `asr_service/`. Weights download at runtime; none are in this repo |
+| Gemini API: `gemini-3.8-flash` (fallback only) | Google's Gemini API terms | hearing the spoken question when `ASR_URL` is not set |
 | Meta MMS-TTS: `facebook/mms-tts-amh`, `facebook/mms-tts-orm` | CC-BY-NC 4.0 (non-commercial) | speaking Amharic and Oromo on our server. Weights download at runtime; none are in this repo |
 
 ## Backend (Python)

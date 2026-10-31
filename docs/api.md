@@ -4,23 +4,23 @@ This is the contract between the Expo app and the backend. Both sides build agai
 
 Scope: birr notes of 5, 10, 50, 100 and 200 (the denominations in the gate labels). Any other note comes back as `unclear`.
 
-**Who does what:** Muse Spark Open reads every note. Gemini only hears the user's question (`POST /intent`); it never reads notes, computes totals or speaks. Answers in Amharic and Oromo come from fixed templates and are spoken by Meta MMS-TTS. SAM finds and locates notes. `SAM_PROVIDER` picks Roboflow's hosted SAM 3 (`roboflow`, the default), our SAM 3.1 endpoint on Modal (`modal`, see `modal_sam/README.md`), or no SAM (`off`, which `SAM_OFF=1` also sets). They are not identical, so hint positions proven on one must be re-checked on the other. `GET /health` reports the provider in use.
+**Who does what:** Muse Spark Open reads every note. Meta Omnilingual ASR hears the user's question and Muse turns it into the intent (`POST /intent`; Gemini only as a fallback). No model computes totals. Answers in Amharic and Oromo come from fixed templates and are spoken by Meta MMS-TTS. SAM finds and locates notes. `SAM_PROVIDER` picks Roboflow's hosted SAM 3 (`roboflow`, the default), our SAM 3.1 endpoint on Modal (`modal`, see `modal_sam/README.md`), or no SAM (`off`, which `SAM_OFF=1` also sets). They are not identical, so hint positions proven on one must be re-checked on the other. `GET /health` reports the provider in use.
 
 ## Core rules
 
 1. **The backend computes totals and change in code**, from the per-note reads. The model never states a total.
 2. **A total is only spoken when we're sure.** That means: two independent Muse reads of the photo list the same notes (the same multiset of denominations, order ignored), SAM's note count equals that note count, no note is `partial` or `unclear`, and every denomination is in scope. Otherwise the outcome is `guide` or `rescan`, and `total` is `null`. There is no exception: the slow-scan retry in §2.1 uses a single read and never speaks a total.
-3. **No images or recordings are stored.** The backend keeps only the trace (§4). The app strips EXIF metadata, including GPS location, before uploading. Voice questions go to Gemini to be understood, and neither the audio nor the transcript is kept.
+3. **No images or recordings are stored.** The backend keeps only the trace (§4). The app strips EXIF metadata, including GPS location, before uploading. Voice questions are transcribed on our own server (Omnilingual ASR), and neither the audio nor the transcript is kept.
 
 ## 1. `POST /intent`: what the user asked
 
-The user holds the screen (or taps Ask) and speaks. Gemini hears the question and extracts the intent. Neither the audio nor the transcript is stored.
+The user holds the screen (or taps Ask) and speaks. **Meta Omnilingual ASR** (`omniASR_CTC_300M_v2`, a local service on the box, §1.2) writes down what was said, and **Muse Spark Open** turns that transcript into the intent and amounts. Without `ASR_URL`, Gemini does both as a fallback; with neither, the endpoint answers 501. Neither the audio nor the transcript is stored.
 
 **Request:** `multipart/form-data`
 | Field | Type | Notes |
 |---|---|---|
 | `audio` | file | m4a (AAC), wav, webm, mp3, ogg or flac, about 10 s at most (`MAX_AUDIO_BYTES`, default 3 MB) |
-| `lang` | string | optional: the app's current language (`am`, `om` or `en`), used when Gemini can't tell |
+| `lang` | string | optional: the app's current language (`am`, `om` or `en`), passed to the recogniser and used when the language can't be told |
 
 **Response 200**
 ```json
@@ -38,10 +38,11 @@ The user holds the screen (or taps Ask) and speaks. Gemini hears the question an
 - `intent`: `count`, `change`, or `unknown` when the question was not understood.
 - `next`: what the app does now. `scan` means the next tap scans with this intent (and `paid`/`price` for a change check). `ask` means speak `speech` and let the user ask again: the question was not understood, an amount is missing, or the price is more than what was paid. `done` means nothing to scan: they paid exactly the price.
 - `lang`: the language the user spoke (`am`, `om` or `en`). The app answers in it.
-- `paid` and `price`: whole birr, only for `change`; `null` when not said. Gemini is told never to guess an amount.
+- `paid` and `price`: whole birr, only for `change`; `null` when not said. The model is told never to guess an amount, code checks them, and the answer reads them back to the user before any scan.
+- When the recogniser hears nothing, the answer is `intent: "unknown"`, `next: "ask"` with "Sorry, I couldn't hear that".
 - `speech`, `speech_audio`, `speech_todo`: see §1.1.
 
-**Errors:** `400 bad_request` (no audio, not audio, or too large), `501 not_implemented` (no `GEMINI_API_KEY` on the backend; the app falls back to tap-to-count), `502 upstream_error` (Gemini failed or timed out). Each carries `speech`, as in §3.
+**Errors:** `400 bad_request` (no audio, not audio, or too large), `501 not_implemented` (neither `ASR_URL` nor `GEMINI_API_KEY` set; the app falls back to tap-to-count), `502 upstream_error` (the recogniser, Muse or Gemini failed or timed out). Each carries `speech`, as in §3.
 
 ### 1.1 Speech in the user's language
 
@@ -49,10 +50,18 @@ Every answer, error and poll carries `speech`: a dict with `en` and, for `lang` 
 
 - **Numbers come from code.** On screen, amounts are digits. For the voice, they are words written by `birr/voice/numbers.py` (350 → ሦስት መቶ ሃምሳ), because the voice model reads no digits. A sentence the templates don't recognise, or whose numbers don't add up, stays English.
 - **`speech_todo`** is set when `speech[lang]` holds English because no template covers that sentence. The app then speaks the English text with an English voice.
-- **`speech_audio`** links a clip of `speech[lang]` that already exists, so the app can play it at once. The clips come from **Meta MMS-TTS** (`facebook/mms-tts-amh`, `facebook/mms-tts-orm`) on the backend's CPU (`TTS_ENGINE=mms`, the `tts` extra; `TTS_LANGS`, default `am,om`). It's left out when MMS is off, or when a clip can't be made; the app then uses the phone's voice.
+- **`speech_audio`** links a clip of `speech[lang]` that already exists, so the app can play it at once. The clips come from **Meta MMS-TTS** (`facebook/mms-tts-amh`, `facebook/mms-tts-orm`) on the backend's CPU (`TTS_ENGINE=mms`, the `tts` extra; `TTS_LANGS`, default `am`: the MMS Oromo voice tested poorly, so Oromo answers stay text until a native speaker approves it). It's left out when MMS is off, or when a clip can't be made; the app then uses the phone's voice.
 - **`GET /speak/{clip_id}`** returns the clip (`audio/wav`, 16 kHz mono, cacheable). It serves only text the backend itself wrote, so it can't be used to speak arbitrary text. An unknown id answers `404`, and an MMS failure answers `502`.
 - **`GET /phrases?lang=am`** returns the app's own prompts (keys like `counting`, `noNetwork`) as `{"lang": "am", "phrases": {"counting": {"text": "...", "audio": "/speak/…"}}}`, with `audio` `null` where there is no clip. The app downloads the clips so they play offline. The English texts live in `birr/voice/speech.py` (`APP_PHRASES`) and must match `app/src/voice.ts` (`PROMPTS`).
 - The fixed phrases' clips are made at startup. The templates are drafts: a native speaker checks them, and the wording is fixed by editing `birr/voice/templates.py`.
+
+### 1.2 The speech-recognition service (internal)
+
+Meta Omnilingual ASR needs an older PyTorch than MMS, so it runs as its own small service on the box, in its own Python environment (`asr_service/`). It listens on `127.0.0.1` only; the app never calls it. The backend calls it with `ASR_URL`.
+
+- `POST /transcribe?lang=amh_Ethi|orm_Latn|eng_Latn`. The body is the audio exactly as the app uploaded it (m4a/AAC from phones, webm/opus from the web preview, or wav), with that `Content-Type`. The service decodes it to 16 kHz mono and rejects clips over 30 s. It answers `{"text": "<transcript>", "lang": "amh_Ethi", "ms": 612}`, `400` for unreadable audio, `500` for a model error.
+- `GET /health` answers `{"ok": true, "model": "omniASR_CTC_300M_v2"}`.
+- Measured on the box (4 vCPU, no GPU): 1.5 s to load (cached), about 1.8 GB RAM, about 0.6–0.8 s for a 4-second question.
 
 ## 2. `POST /scan`: count the notes
 
@@ -148,8 +157,8 @@ Any non-200 response (and any `error` job) carries spoken text, so the user alwa
 | 400 | `bad_request`: missing field, unsupported file type, or image too large |
 | 404 | `not_found`: unknown or expired `job_id` on `GET /scan/{job_id}` |
 | 404 | `not_found` on `GET /speak/{clip_id}`: a clip id this backend never handed out |
-| 501 | `not_implemented`: `POST /intent` without `GEMINI_API_KEY` |
-| 502 | `upstream_error`: every Muse read failed (as the `error` of a job, or directly with `wait=true`), or Gemini failed on `/intent`, or MMS failed on `/speak`. SAM failing alone is not an error: the outcome is `rescan` |
+| 501 | `not_implemented`: `POST /intent` with neither `ASR_URL` nor `GEMINI_API_KEY` |
+| 502 | `upstream_error`: every Muse read failed (as the `error` of a job, or directly with `wait=true`), or the recogniser, Muse or Gemini failed on `/intent`, or MMS failed on `/speak`. SAM failing alone is not an error: the outcome is `rescan` |
 
 A scan that runs past the 60 s limit is not an error: it ends as `outcome: "rescan"` (§2.1).
 
@@ -171,6 +180,6 @@ Each `/scan` and `/intent` call writes one JSON trace, keyed by `trace_id`. It r
 
 ```json
 {"ok": true, "refs": true, "sam": "off",
- "voice": {"intent": true, "gemini": true, "translates": true, "tts": "mms", "speaks": ["am", "om"]}}
+ "voice": {"hears": "omnilingual", "intent": true, "translates": true, "tts": "mms", "speaks": ["am"]}}
 ```
-`refs`: read B's reference sheets are loaded (without them no scan speaks a total). `sam`: the SAM provider (`roboflow`, `modal` or `off`). `voice.intent`: `POST /intent` works (Gemini key set); `voice.gemini` repeats it for older app builds. `voice.translates`: answers come in Amharic and Oromo (templates, always on). `voice.tts`: `mms` or `off`. `voice.speaks`: the languages answered with clips.
+`refs`: read B's reference sheets are loaded (without them no scan speaks a total). `sam`: the SAM provider (`roboflow`, `modal` or `off`). `voice.hears`: what hears voice questions (`omnilingual`, `gemini` or `off`); `voice.intent`: `POST /intent` works. `voice.translates`: answers come in Amharic and Oromo (templates, always on). `voice.tts`: `mms` or `off`. `voice.speaks`: the languages answered with clips.

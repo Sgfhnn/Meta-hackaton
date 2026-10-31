@@ -109,9 +109,15 @@ class Settings:
     # sheet is made from pre-event photos. Missing sheets make read B fail, so no total is spoken.
     refs_dir: str = field(default_factory=lambda: os.getenv("REFS_DIR", "").strip())
     trace_dir: str = field(default_factory=lambda: os.getenv("TRACE_DIR", "traces"))
-    # Voice (docs/api.md section 1). Gemini only hears the spoken question (POST /intent); without
-    # GEMINI_API_KEY that endpoint answers 501. Answers in Amharic and Oromo come from fixed
-    # templates (birr/voice/templates.py) and are spoken by Meta MMS-TTS on the CPU.
+    # Voice (docs/api.md section 1). The spoken question: Meta Omnilingual ASR (a local service at
+    # ASR_URL) hears it and Muse turns the transcript into the intent; Gemini is only the fallback
+    # when ASR_URL is not set. With neither, POST /intent answers 501. Answers in Amharic and Oromo
+    # come from fixed templates (birr/voice/templates.py) and are spoken by Meta MMS-TTS on the CPU.
+    asr_url: str = field(default_factory=lambda: os.getenv("ASR_URL", "").strip().rstrip("/"))
+    asr_timeout_s: float = field(default_factory=lambda: float(os.getenv("ASR_TIMEOUT_S", "10")))
+    intent_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("INTENT_TIMEOUT_S", "15"))
+    )
     gemini_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_base_url: str = field(
         default_factory=lambda: os.getenv(
@@ -131,10 +137,11 @@ class Settings:
     )
     # "mms" (Meta MMS-TTS, needs `uv sync --extra tts`) or "off" (text only; the app's phone voice).
     tts_engine: str = field(default_factory=lambda: os.getenv("TTS_ENGINE", "mms").strip().lower())
-    # Languages spoken as clips. Both are drafts until a native speaker has listened.
+    # Languages spoken as clips. Amharic only by default: the MMS Oromo voice tested poorly (Hark's
+    # ASR check, Oct 31); TTS_LANGS=am,om once a native speaker approves it.
     tts_langs: frozenset[str] = field(
         default_factory=lambda: frozenset(
-            x.strip() for x in os.getenv("TTS_LANGS", "am,om").split(",") if x.strip()
+            x.strip() for x in os.getenv("TTS_LANGS", "am").split(",") if x.strip()
         )
     )
     mms_model_am: str = field(
