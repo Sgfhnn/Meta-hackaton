@@ -100,6 +100,24 @@ scan_round_trip() {
   tail -n +"$since" "$JSLOG" | grep -o 'POST /frame .*' | sort | uniq -c | tee "$OUT/$1-frames.txt"
 }
 
+# After a scan answer, the app may look again by itself (guide / rescan, up to 3 attempts).
+# Wait until no new look starts within 12 s.
+settle_scans() {
+  local mark looks=0
+  for _ in 1 2 3; do
+    mark=$(jslines)
+    sleep 12
+    if tail -n +"$mark" "$JSLOG" | grep -q 'guidance start'; then
+      looks=$((looks + 1))
+      log "$1: the answer asked for another look ($looks)"
+      wait_js 'GET /scan/.* (done|error)|POST /scan -> 200|scan failed' 180 "$mark" || fail "$1: the extra look never finished"
+    else
+      return 0
+    fi
+  done
+  sleep 12
+}
+
 log "runner public IP: $(curl -s -m 10 https://api.ipify.org || echo unknown)"
 log "start (UTC): $(date -u +%FT%TZ)"
 adb shell getprop ro.build.version.release
@@ -173,14 +191,8 @@ log "scan answer on screen: $MSG"
 echo "$MSG" > "$OUT/scan-answer.txt"
 no_net_check scan "$MSG"
 case "$MSG" in ""|"Counting."|*"could not count that"*) fail "scan: no backend answer on screen ($MSG)" ;; esac
-# A guide/rescan answer starts another look by itself; let it finish before the next step.
-wait_js 'guidance end' 1 "$(jslines)" || true
-sleep 8
-if tail -n +"$SINCE" "$JSLOG" | grep -q 'guidance start (attempt 2)'; then
-  log "the answer asked for another look; waiting for it"
-  wait_js 'GET /scan/.* (done|error)' 150 "$(jslines)" || true
-  sleep 15
-fi
+# A guide/rescan answer starts another look by itself (up to 3 attempts): let them finish.
+settle_scans scan
 
 # ---- 4. hold to talk
 log "hold to talk (7.5 s)"
@@ -235,6 +247,7 @@ no_net_check "Amharic scan" "$MSG"
 tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /frame lang=am' || fail "Amharic: /frame not sent with lang=am"
 if tail -n +"$SINCE" "$JSLOG" | grep -qE 'clip failed|clip did not start'; then fail "Amharic clip did not play"; fi
 if tail -n +"$SINCE" "$JSLOG" | grep -qE '\[birr\] lang: (en|om)'; then fail "Amharic: language switched during the scan"; fi
+settle_scans amharic-scan
 
 # ---- 6. relaunch: the language is remembered
 sleep 10
