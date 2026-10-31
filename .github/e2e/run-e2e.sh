@@ -4,6 +4,8 @@
 #   2. tap the screen: photo from the emulator camera -> POST /scan -> GET /scan/{id} -> spoken answer
 #   3. tap Ask, wait, tap again: recording -> POST /intent -> spoken answer
 #   4. hold the screen (the other way to ask): same round trip
+#   5. switch to Amharic (Oromo must not be offered), scan, then ask by voice: the request carries
+#      lang=am and the app stays in Amharic whatever the answer says
 # Each answer must come from the backend, never the app's "cannot reach the server" prompt.
 # Output: e2e-out/ (screenshots, uiautomator dumps, logcat). Exit code != 0 on any failure.
 set -uo pipefail
@@ -139,7 +141,7 @@ dump 05-intent-answer
 MSG=$(screen_after "$SINCE")
 log "intent answer on screen: $MSG"
 echo "$MSG" > "$OUT/intent-answer.txt"
-tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /intent -> 200' || fail "intent: no 200 from POST /intent"
+tail -n +"$SINCE" "$JSLOG" | grep -qE 'POST /intent( lang=[a-z]+)? -> 200' || fail "intent: no 200 from POST /intent"
 case "$MSG" in
   *"$NO_NET"*) fail "intent: app says it cannot reach the server" ;;
   ""|"Listening."|*"Hold the screen"*|*"allow the microphone"*) fail "intent: no backend answer on screen ($MSG)" ;;
@@ -159,7 +161,7 @@ shot 06-hold-answer
 dump 06-hold-answer
 MSG=$(screen_after "$SINCE")
 log "hold-to-ask answer on screen: $MSG"
-tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /intent -> 200' || fail "hold-to-ask: no 200 from POST /intent"
+tail -n +"$SINCE" "$JSLOG" | grep -qE 'POST /intent( lang=[a-z]+)? -> 200' || fail "hold-to-ask: no 200 from POST /intent"
 case "$MSG" in
   *"$NO_NET"*) fail "hold-to-ask: app says it cannot reach the server" ;;
   ""|"Listening."|*"Hold the screen"*|*"allow the microphone"*) fail "hold-to-ask: no backend answer on screen ($MSG)" ;;
@@ -197,9 +199,52 @@ if grep -q 'አማርኛ' "$OUT/07-language.txt" 2>/dev/null; then
   echo "$MSG" > "$OUT/amharic-answer.txt"
   case "$MSG" in *"$NO_NET"*|*"ሰርቨሩን ማግኘት"*) fail "Amharic scan: app says it cannot reach the server" ;; esac
   if tail -n +"$SINCE" "$JSLOG" | grep -qE 'clip failed|clip did not start'; then fail "Amharic clip did not play"; fi
+
+  # ---- a voice question in Amharic: the app must stay in Amharic (the phone bug: it flipped back
+  # to English when the backend guessed the question was English)
+  sleep 4
+  log "voice in Amharic (Ask button): tap $AX,$AY, wait 3 s, tap again"
+  dismiss_dialogs
+  SINCE=$(jslines)
+  adb shell input tap $AX $AY
+  sleep 3
+  adb shell input tap $AX $AY
+  if wait_js '\[birr\] POST /intent|intent failed' 60 "$SINCE"; then log "Amharic intent finished"; else fail "Amharic: POST /intent never answered"; fi
+  sleep 8 # the answer (clip or voice) plays
+  shot 09-amharic-intent
+  dump 09-amharic-intent
+  MSG=$(screen_after "$SINCE")
+  log "Amharic intent answer on screen: $MSG"
+  echo "$MSG" > "$OUT/amharic-intent-answer.txt"
+  tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] POST /intent.*' | tee "$OUT/amharic-intent-request.txt"
+  grep -q 'POST /intent lang=am -> 200' "$OUT/amharic-intent-request.txt" || fail "Amharic: /intent was not sent with lang=am (or not 200)"
+  tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] intent answered in .*' || true
+  if tail -n +"$SINCE" "$JSLOG" | grep -qE '\[birr\] lang: (en|om)'; then fail "Amharic: the app switched language after a voice question"; fi
+  grep -q 'content-desc="Language: Amharic"' "$OUT/09-amharic-intent.xml" 2>/dev/null || fail "Amharic: language pill no longer says Amharic after the voice question"
+  grep -q 'አማርኛ' "$OUT/09-amharic-intent.txt" 2>/dev/null || fail "Amharic: pill label አማርኛ gone after the voice question"
+  case "$MSG" in *"$NO_NET"*|*"ሰርቨሩን ማግኘት"*) fail "Amharic intent: app says it cannot reach the server" ;; esac
+
+  # ---- the pill cycles Amharic -> English: Oromo is parked and must not be offered
+  LB=$(grep -o 'content-desc="Language: [^"]*"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "$OUT/09-amharic-intent.xml" 2>/dev/null | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
+  if [ -n "$LB" ]; then
+    read -r X1 Y1 X2 Y2 <<<"$(echo "$LB" | tr -c '0-9' ' ')"
+    dismiss_dialogs
+    adb shell input tap $(((X1 + X2) / 2)) $(((Y1 + Y2) / 2))
+    sleep 4
+    shot 10-language-next
+    dump 10-language-next
+    grep -q 'content-desc="Language: English"' "$OUT/10-language-next.xml" 2>/dev/null || fail "language pill after Amharic is not English (Oromo offered?)"
+  else
+    fail "language pill not found after the Amharic voice question"
+  fi
 else
-  log "Amharic not offered (backend /health said no translation?)"
+  fail "Amharic not offered (backend /health said no translation?)"
 fi
+
+# Oromo is parked: never offered, never selected.
+grep -o '\[birr\] langs offered: .*' "$JSLOG" | tail -1 | tee "$OUT/langs-offered.txt"
+grep -qE 'offered: (.*,)?om(,|$)' "$OUT/langs-offered.txt" && fail "Oromo is offered"
+grep -qE '\[birr\] lang: om|Afaan Oromoo' "$JSLOG" "$OUT"/*.txt 2>/dev/null && fail "Oromo was selected or shown"
 
 sleep 2
 adb shell pidof $PKG >/dev/null || fail "app died during the test"

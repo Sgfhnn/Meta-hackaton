@@ -25,6 +25,10 @@ const STILL_COUNTING_AT_TICK = 5; // docs/api.md: "Still counting." once, after 
 // A change check set up by voice applies to the next scans for this long.
 const CHANGE_TTL_MS = 5 * 60_000;
 const LANG_ORDER: Lang[] = ['en', 'am', 'om'];
+// Oromo is parked: the backend still answers in it, but the app does not offer it until a
+// native speaker has checked the voice. Remove 'om' here to offer it again.
+const HIDDEN_LANGS: Lang[] = ['om'];
+const OFFERED = LANG_ORDER.filter((l) => !HIDDEN_LANGS.includes(l));
 const LANG_NAMES: Record<Lang, string> = { en: 'English', am: 'Amharic', om: 'Afaan Oromoo' };
 const LANG_LABELS: Record<Lang, string> = { en: 'English', am: 'አማርኛ', om: 'Afaan Oromoo' };
 const GREEN = '#0B3B2D'; // the logo's colours
@@ -48,16 +52,21 @@ export default function App() {
   const question = useVoiceQuestion(onRecorded);
 
   useEffect(() => {
-    // Amharic and Oromo are offered when the backend translates, or when the phone has a voice.
-    // Separate calls: on some browsers the voice list never arrives.
-    const add = (more: Lang[]) => setLangs((now) => LANG_ORDER.filter((l) => now.includes(l) || more.includes(l)));
+    // Amharic is offered when the backend translates, or when the phone has a voice (Oromo is
+    // hidden, see HIDDEN_LANGS). Separate calls: on some browsers the voice list never arrives.
+    const add = (more: Lang[]) => setLangs((now) => OFFERED.filter((l) => now.includes(l) || more.includes(l)));
     loadVoices().then((voices) => add([...voices]));
     backendTranslates().then((translates) => translates && add(['am', 'om']));
   }, []);
 
   useEffect(() => {
+    console.log(`[birr] lang: ${lang}`);
     if (lang !== 'en') fetchPhrases(lang).then((p) => setPhrases(lang, p));
   }, [lang]);
+
+  useEffect(() => {
+    console.log(`[birr] langs offered: ${langs.join(',')}`);
+  }, [langs]);
 
   // What the screen says, in logcat too (ReactNativeJS), so a tester can follow it.
   useEffect(() => {
@@ -220,9 +229,9 @@ export default function App() {
       return;
     }
     const answer = result.body;
-    // Answer in the language they spoke, when the app offers it.
-    const spoken = langs.includes(answer.lang) ? answer.lang : lang;
-    if (spoken !== lang) setLang(spoken);
+    // The language the user chose is sticky: an answer never switches it. The backend answers in
+    // the lang we sent; there is no "change language" intent (docs/api.md), only the language pill.
+    if (answer.lang !== lang) console.log(`[birr] intent answered in ${answer.lang}; staying in ${lang}`);
     if (answer.next === 'scan') {
       // The user now spreads the notes and taps; that scan checks the change if they asked.
       attempt.current = 1;
@@ -235,7 +244,7 @@ export default function App() {
         ? Haptics.NotificationFeedbackType.Warning
         : Haptics.NotificationFeedbackType.Success,
     );
-    announceAnswer(answer, spoken, 'heardFailed');
+    announceAnswer(answer, lang, 'heardFailed');
   }
 
   // Ask the camera for at least 2048 px photos once it is up. Changing the size restarts the

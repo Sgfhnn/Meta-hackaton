@@ -28,7 +28,7 @@ export async function askIntent(audioUri: string, lang: Lang, timeoutMs: number)
     form.append('audio', part, part.type?.includes('webm') ? 'question.webm' : 'question.m4a');
     form.append('lang', lang);
     const { status, text } = await postForm(`${API_URL}/intent`, form, controller.signal);
-    console.log(`[birr] POST /intent -> ${status}`);
+    console.log(`[birr] POST /intent lang=${lang} -> ${status}`);
     const body = JSON.parse(text);
     return status === 200 ? { kind: 'ok', body: body as IntentResponse } : { kind: 'error', body: body as ScanError };
   } catch (e) {
