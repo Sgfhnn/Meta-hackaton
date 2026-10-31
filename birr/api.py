@@ -370,6 +370,12 @@ async def assist_turn(
         }  # fmt: skip
     elif not heard:
         decision = None
+    elif st.camera_open and (command := assist.camera_command(heard)):
+        decided_by = "code"  # "take it" / "stop" while the camera is open: no model call
+        decision = {
+            "action": command, "lang": lang, "paid": None, "price": None, "needs": None,
+            "reply_en": "", "reply_am": "",
+        }  # fmt: skip
     else:
         history = app.state.sessions.history(sid)
         try:

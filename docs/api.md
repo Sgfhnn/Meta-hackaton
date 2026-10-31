@@ -199,7 +199,7 @@ The app is a conversation: the user taps anywhere (or holds) and speaks, and the
 | `text` | string | a typed turn instead of audio (tests, the web preview), at most 500 characters |
 | `lang` | string | `en` or `am`: the language the user chose. The answer is always in it, unless the action is `set_lang` |
 | `session_id` | string | optional, picked by the app (a random id per launch). The last 6 turns of a session stay in memory for 30 minutes so the user can answer a question ("and the price was 320") |
-| `state` | JSON string | optional: `{"last_total": 350, "last_notes": [200, 100, 50], "pending_paid": 500, "pending_price": null}`. What the app last told the user, so "how much did I have?" and a two-part change question work |
+| `state` | JSON string | optional: `{"last_total": 350, "last_notes": [200, 100, 50], "pending_paid": 500, "pending_price": null, "camera_open": false}`. What the app last told the user, so "how much did I have?" and a two-part change question work. `camera_open: true` while live guidance runs: then "take it" / "now" means `capture` and "stop" / "cancel" closes the camera |
 
 **Response 200**
 ```json
@@ -224,10 +224,11 @@ The app is a conversation: the user taps anywhere (or holds) and speaks, and the
 | `set_lang` | Switch the app to `lang`, remember it, and speak the confirmation (already in the new language) |
 | `repeat` | Say the last answer again (the app keeps it; `speech` is only "Here it is again.") |
 | `help` | Speak what the app can do |
-| `stop` | Stop speaking and wait |
+| `stop` | Stop speaking. With the camera open: close it ("Okay, I closed the camera.") and keep listening; otherwise stop listening hands-free until the next tap |
+| `capture` | Only when the app sent `camera_open: true`: take the photo now and scan it. Without the camera open, a capture request is answered as `scan` |
 | `none` | Speak `speech`. With `needs: "ask"`, listen again right after (an amount is missing, or nothing was heard) |
 
-`decided_by`: `muse`, `keywords` (Muse failed), `gemini` (Gemini heard the audio) or `none` (nothing was heard). `heard: false` means the recogniser heard nothing ("Sorry, I couldn't hear that"). Errors are as in §3: `400` (no audio and no text, bad audio), `501` (no recogniser configured), `502` (the recogniser failed and there is no fallback). The trace records the action, who decided it, amounts and timings, never the words.
+`decided_by`: `muse`, `code` (a short camera command such as "take it", "now", "stop", "አንሳ", "አቁም" said while `camera_open`, matched on the whole utterance with no model call), `keywords` (Muse failed), `gemini` (Gemini heard the audio) or `none` (nothing was heard). `heard: false` means the recogniser heard nothing ("Sorry, I couldn't hear that"). Errors are as in §3: `400` (no audio and no text, bad audio), `501` (no recogniser configured), `502` (the recogniser failed and there is no fallback). The trace records the action, who decided it, amounts and timings, never the words.
 
 Measured on the box (Oct 31, 12 real clips, Amharic and English): ASR + Muse p50 1.4 s, p90 1.8 s. A free Amharic reply adds 0.7–2.5 s of MMS synthesis.
 

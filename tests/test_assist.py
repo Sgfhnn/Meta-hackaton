@@ -249,3 +249,64 @@ def test_free_answers_are_cut_to_two_sentences_and_one_script():
     assert (turn.free_en, turn.free_am) == ("One. Two.", "አንድ ነው። ሁለት ነው።")
     d = decision("none", en="Fold it.", am="ብሩን በطول ያጥፉ።")  # stray Arabic from the model
     assert assist.resolve(d, "q", "am", st).text == say.ASSIST_OFF_TOPIC
+
+
+# --- voice commands while the camera is open (hands-free guidance) ----------------------------
+
+CAMERA = json.dumps({"camera_open": True})
+
+
+@pytest.mark.parametrize(
+    "heard,action",
+    [("Take it.", "capture"), ("now", "capture"), ("ok take it", "capture"), ("አንሳ።", "capture"),
+     ("አሁን", "capture"), ("Stop!", "stop"), ("cancel", "stop"), ("አቁም", "stop"),
+     ("ካሜራውን ዝጋ", "stop")],
+)  # fmt: skip
+def test_camera_commands_skip_the_model(ac, heard, action):
+    ac.script["heard"] = heard
+    body = say_audio(ac, state=CAMERA).json()
+    assert body["action"] == action and body["decided_by"] == "code"
+    assert ac.script["calls"] == []  # no Muse call: the user is holding the phone still
+    said = say.ASSIST_CAPTURE if action == "capture" else say.ASSIST_CLOSED
+    assert body["speech"]["en"] == said
+
+
+def test_camera_command_in_amharic_is_spoken_in_amharic(ac):
+    ac.script["heard"] = "አንሳ"
+    body = say_audio(ac, lang="am", state=CAMERA).json()
+    assert body["action"] == "capture" and body["lang"] == "am"
+    assert body["speech"]["am"] == localize.TEMPLATES["am"]["fixed"]["ASSIST_CAPTURE"]
+
+
+def test_longer_requests_with_the_camera_open_go_to_muse(ac):
+    ac.script["heard"] = "switch to Amharic please"
+    ac.script["decision"] = decision("set_lang", lang="am")
+    body = say_audio(ac, state=CAMERA).json()
+    assert body["action"] == "set_lang" and body["lang"] == "am"
+    assert ac.script["calls"][0]["state"].camera_open is True
+
+
+def test_model_capture_and_stop_depend_on_the_camera(ac):
+    ac.script["heard"] = "could you snap it"
+    ac.script["decision"] = decision("capture")
+    assert say_audio(ac, state=CAMERA).json()["action"] == "capture"
+    body = say_audio(ac).json()  # camera closed: capture means "look at my money"
+    assert body["action"] == "scan" and body["speech"]["en"] == say.ASSIST_SCAN
+    ac.script["decision"] = decision("stop")
+    assert say_audio(ac, state=CAMERA).json()["speech"]["en"] == say.ASSIST_CLOSED
+    assert say_audio(ac).json()["speech"]["en"] == say.ASSIST_STOP
+
+
+def test_camera_words_without_the_camera_are_not_commands(ac):
+    ac.script["heard"] = "now"
+    ac.script["decision"] = decision("none", en="What would you like me to do?")
+    body = say_audio(ac).json()
+    assert body["decided_by"] == "muse" and len(ac.script["calls"]) == 1
+
+
+def test_camera_command_matcher():
+    assert assist.camera_command("Please take the picture") == "capture"
+    assert assist.camera_command("now count my change") is None
+    assert assist.camera_command("እባክህ አቁም") == "stop"
+    assert assist.camera_command("") is None
+    assert assist.State.parse('{"camera_open": "yes"}').camera_open is False

@@ -33,7 +33,7 @@ from birr.config import Settings
 from birr.read.muse import _json_objects
 from birr.voice import speech as say
 
-ACTIONS = ("none", "scan", "change", "set_lang", "repeat", "help", "stop")
+ACTIONS = ("none", "scan", "change", "set_lang", "repeat", "help", "stop", "capture")
 LANGS = ("en", "am")
 DENOMINATIONS = {1, 5, 10, 50, 100, 200}
 MAX_TURNS = 6  # user+assistant pairs kept per session
@@ -80,7 +80,10 @@ amount is missing or only partly heard, use null and set needs="ask".
 English, am = Amharic). Only for an explicit request; never because of the language they spoke in.
 - repeat: they want the last answer again.
 - help: they ask what you can do or how to use the app.
-- stop: they want you to stop or be quiet.
+- stop: they want you to stop, cancel or be quiet; while the camera is open this closes it \
+("stop", "cancel", "close the camera", "አቁም", "ተወው").
+- capture: only while the camera is open (camera_open is true below): take the photo now \
+("take it", "now", "take the picture", "ready", "አንሳ", "አሁን", "ፎቶ አንሳ").
 - none: anything else, such as a question about money handling, the notes in use (5, 10, 50, \
 100 and 200 birr), or their last result. Answer it in reply_en/reply_am.
 
@@ -108,6 +111,7 @@ class State:
     last_notes: list[int] = field(default_factory=list)
     pending_paid: int | None = None
     pending_price: int | None = None
+    camera_open: bool = False  # live guidance is running: "take it" / "stop" act on the camera
 
     @classmethod
     def parse(cls, raw: str | None) -> State:
@@ -123,6 +127,7 @@ class State:
             last_notes=[n for n in notes if _amount(n)][:30] if isinstance(notes, list) else [],
             pending_paid=_amount(data.get("pending_paid", data.get("paid"))),
             pending_price=_amount(data.get("pending_price", data.get("price"))),
+            camera_open=data.get("camera_open") is True,
         )
 
     def describe(self, lang: str) -> str:
@@ -133,6 +138,7 @@ class State:
                 "last_notes": self.last_notes or None,
                 "paid_said_earlier": self.pending_paid,
                 "price_said_earlier": self.pending_price,
+                "camera_open": self.camera_open,
             }
         )
 
@@ -263,6 +269,33 @@ def keywords(heard: str, lang: str) -> dict:
     }  # fmt: skip
 
 
+# While the camera is open, a short command acts at once, without a model call (the user is
+# holding the phone still and waiting). Matched on the whole utterance, so "now count my change"
+# still goes to Muse.
+_CAPTURE = {
+    "take it", "take", "now", "take it now", "take the photo", "take the picture", "take a photo",
+    "take a picture", "ready", "okay take it", "ok take it", "capture", "shoot", "go",
+    "አንሳ", "አሁን", "አሁን አንሳ", "ፎቶ አንሳ", "ፎቶውን አንሳ", "አንሺ", "ያዝ", "ዝግጁ",
+}  # fmt: skip
+_STOP = {
+    "stop", "cancel", "close", "close it", "close the camera", "never mind", "nevermind",
+    "stop it", "quit", "አቁም", "አቁሚ", "ተወው", "ተዪው", "ዝጋ", "ካሜራውን ዝጋ", "ይቅር", "በቃ",
+}  # fmt: skip
+_PUNCT = re.compile(r"[^\w\s]|[\u1360-\u1368]")  # Latin and Ethiopic punctuation
+
+
+def camera_command(heard: str) -> str | None:
+    """capture / stop for a short command said while the camera is open, else None."""
+    text = " ".join(_PUNCT.sub(" ", heard.lower()).split())
+    text = re.sub(r"^(please|ok|okay|birr|እባክህ|እባክሽ|እባክዎ)\s+", "", text)
+    text = re.sub(r"\s+(please|now please|እባክህ|እባክዎ)$", "", text)
+    if text in _CAPTURE:
+        return "capture"
+    if text in _STOP:
+        return "stop"
+    return None
+
+
 def numbers_allowed(text: str, heard: str, state: State, extra: set[int]) -> bool:
     """Every number in a model reply was said by the user, told to them by the app (state), heard
     as an amount, or is a birr denomination."""
@@ -327,7 +360,13 @@ def resolve(d: dict, heard: str, lang: str, state: State) -> Turn:
         return Turn("repeat", lang, text=say.ASSIST_REPEAT)
     if action == "help":
         return Turn("help", lang, text=say.ASSIST_HELP)
+    if action == "capture":
+        if state.camera_open:
+            return Turn("capture", lang, text=say.ASSIST_CAPTURE)
+        return Turn("scan", lang, intent="count", text=say.ASSIST_SCAN)  # no camera yet: open it
     if action == "stop":
+        if state.camera_open:
+            return Turn("stop", lang, text=say.ASSIST_CLOSED)
         return Turn("stop", lang, text=say.ASSIST_STOP)
     # none: the model's own words, if they pass the checks
     en, am = first_sentences(d["reply_en"]), first_sentences(d["reply_am"])

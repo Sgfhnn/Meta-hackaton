@@ -40,6 +40,8 @@ AM = {
         "ASSIST_REPEAT": "እንደገና እነሆ።",
         "ASSIST_STOP": "እሺ። ሲፈልጉኝ ስክሪኑን ይንኩ።",
         "ASSIST_OFF_TOPIC": "ገንዘብዎን መቁጠር ወይም መልስዎን ማረጋገጥ እችላለሁ። ነክተው የሚፈልጉትን ይንገሩኝ።",
+        "ASSIST_CAPTURE": "አሁን ፎቶውን አነሳለሁ። ሳያንቀሳቅሱ ይያዙ።",
+        "ASSIST_CLOSED": "እሺ፣ ካሜራውን ዘግቻለሁ።",
         "LANG_SET_EN": "Okay, I will speak English now.",
         "LANG_SET_AM": "እሺ፣ ከአሁን ጀምሮ በአማርኛ እናገራለሁ።",
     },
@@ -134,6 +136,8 @@ OM = {
         "ASSIST_STOP": "Tole. Yeroo na barbaaddu iskiriinii tuqi.",
         "ASSIST_OFF_TOPIC": "Maallaqa kee lakkaa'uu yookaan jijjiirraa mirkaneessuu nan danda'a."
         " Tuqiitii waan barbaaddu natti himi.",
+        "ASSIST_CAPTURE": "Amma suuraa kaasa. Osoo hin sochoosin qabadhu.",
+        "ASSIST_CLOSED": "Tole, kaameraa cufeera.",
         "LANG_SET_EN": "Okay, I will speak English now.",
         "LANG_SET_AM": "Tole, amma Afaan Amaaraatiin nan dubbadha.",
     },

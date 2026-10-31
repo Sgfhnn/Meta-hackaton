@@ -107,6 +107,8 @@ ASSIST_HELP = (
 )
 ASSIST_REPEAT = "Here it is again."
 ASSIST_STOP = "Okay. Tap the screen when you need me."
+ASSIST_CAPTURE = "Taking the photo now. Hold still."
+ASSIST_CLOSED = "Okay, I closed the camera."
 ASSIST_OFF_TOPIC = "I can count your money or check your change. Tap and tell me what you need."
 LANG_SET_EN = "Okay, I will speak English now."
 LANG_SET_AM = "Okay, I will speak Amharic now."
@@ -125,7 +127,7 @@ FIXED = [
     RESCAN, NO_NOTES, GIVE_UP, TRY_AGAIN, TOO_SLOW, SLOW_RESCAN, STILL_COUNTING, BAD_REQUEST,
     NEED_PRICE, VOICE_TODO, COUNT_PROMPT, INTENT_UNKNOWN, PRICE_OVER_PAID, BAD_AUDIO, NOT_HEARD,
     *FRAME.values(), ASSIST_SCAN, ASSIST_HELP, ASSIST_REPEAT, ASSIST_STOP, ASSIST_OFF_TOPIC,
-    LANG_SET_EN, LANG_SET_AM,
+    ASSIST_CAPTURE, ASSIST_CLOSED, LANG_SET_EN, LANG_SET_AM,
 ]  # fmt: skip
 
 # The app's own prompts (app/src/voice.ts PROMPTS, same keys and English). GET /phrases returns
