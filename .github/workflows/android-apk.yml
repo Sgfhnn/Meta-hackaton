@@ -12,8 +12,6 @@ on:
     paths:
       - app/**
       - .github/workflows/android-apk.yml
-      - .github/workflows/android-e2e.yml
-      - .github/e2e/**
 
 permissions:
   contents: read

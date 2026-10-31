@@ -30,19 +30,36 @@ dump() {
   echo "(uiautomator dump failed)" > "$OUT/$1.txt"
   return 1
 }
-jslog() { adb logcat -d -s ReactNativeJS:V > "$OUT/reactnativejs.txt" 2>/dev/null; cat "$OUT/reactnativejs.txt"; }
-# Wait until logcat shows a line matching $1 after the step started (counted by lines), or time out.
+JSLOG="$OUT/logcat-js.txt" # streamed by a background `adb logcat` from launch on
+# Wait until the JS log shows a line matching $1 after line $3, or $2 seconds pass.
 wait_js() {
-  local pattern=$1 secs=$2 since=$3 i
-  for ((i = 0; i < secs; i++)); do
-    if adb logcat -d -s ReactNativeJS:V 2>/dev/null | tail -n +"$since" | grep -qE "$pattern"; then return 0; fi
-    sleep 1
+  local pattern=$1 deadline=$((SECONDS + $2)) since=$3
+  while ((SECONDS < deadline)); do
+    tail -n +"$since" "$JSLOG" 2>/dev/null | grep -qE "$pattern" && return 0
+    dismiss_dialogs
+    sleep 2
   done
   return 1
 }
-jslines() { adb logcat -d -s ReactNativeJS:V 2>/dev/null | wc -l; }
+jslines() { echo $(($(wc -l < "$JSLOG") + 1)); }
 # The last "screen:" message after line $1.
-screen_after() { adb logcat -d -s ReactNativeJS:V 2>/dev/null | tail -n +"$1" | grep -o '\[birr\] screen: .*' | tail -1 | sed 's/^\[birr\] screen: //'; }
+screen_after() { tail -n +"$1" "$JSLOG" | grep -o '\[birr\] screen: .*' | tail -1 | sed 's/^\[birr\] screen: //'; }
+# CI emulators are slow and Android shows "System UI isn't responding" / "X isn't responding"
+# dialogs over the app. Answer "Wait" so taps reach the app.
+dismiss_dialogs() {
+  adb shell uiautomator dump /sdcard/anr.xml >/dev/null 2>&1 || return 0
+  local xml b x1 y1 x2 y2
+  xml=$(adb shell cat /sdcard/anr.xml 2>/dev/null)
+  if grep -q "isn't responding" <<<"$xml"; then
+    b=$(grep -o 'text="Wait"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' <<<"$xml" | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
+    if [ -n "$b" ]; then
+      read -r x1 y1 x2 y2 <<<"$(echo "$b" | tr -c '0-9' ' ')"
+      log "dismissing an ANR dialog (Wait)"
+      adb shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2))
+      sleep 1
+    fi
+  fi
+}
 
 log "runner public IP: $(curl -s -m 10 https://api.ipify.org || echo unknown)"
 log "start (UTC): $(date -u +%FT%TZ)"
@@ -59,12 +76,17 @@ adb shell pm grant $PKG android.permission.RECORD_AUDIO
 adb shell dumpsys package $PKG | grep -E 'android.permission.(CAMERA|RECORD_AUDIO|INTERNET)' | tee "$OUT/permissions.txt"
 grep -q 'RECORD_AUDIO: granted=true' "$OUT/permissions.txt" || fail "RECORD_AUDIO not granted (missing from manifest?)"
 
+adb shell settings put global hide_error_dialogs 1 || true
+dismiss_dialogs
 adb logcat -c
+adb logcat -v time -s ReactNativeJS:V AndroidRuntime:E > "$JSLOG" 2>/dev/null &
+LOGCAT_PID=$!
 log "launch"
 adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null
 # The welcome line is the first message, logged once the JS is running.
-if wait_js '\[birr\] screen:' 60 1; then log "JS running"; else fail "app JS never started"; fi
+if wait_js '\[birr\] screen:' 90 1; then log "JS running"; else fail "app JS never started"; fi
 sleep 8 # camera ready + welcome
+dismiss_dialogs
 shot 01-launched
 dump 01-launched
 cat "$OUT/01-launched.txt"
@@ -73,6 +95,7 @@ grep -q 'Count money' "$OUT/01-launched.xml" 2>/dev/null || log "warning: 'Count
 
 # ---- scan: tap the big area (middle of the screen, above the Ask button)
 log "scan: tap ${W}/2 x ${H}*4/10"
+dismiss_dialogs
 SINCE=$(jslines)
 adb shell input tap $((W / 2)) $((H * 4 / 10))
 sleep 3
@@ -89,7 +112,7 @@ case "$MSG" in
   *"$NO_NET"*) fail "scan: app says it cannot reach the server" ;;
   ""|"Counting."|*"could not count that"*) fail "scan: no backend answer on screen ($MSG)" ;;
 esac
-adb logcat -d -s ReactNativeJS:V | tail -n +"$SINCE" | grep -q 'GET /scan/' || fail "scan: job was never polled"
+tail -n +"$SINCE" "$JSLOG" | grep -q 'GET /scan/' || fail "scan: job was never polled"
 
 # ---- voice: Ask button (tap, speak, tap again)
 sleep 4
@@ -102,6 +125,7 @@ else
   AX=$((W / 2)); AY=$((H * 78 / 100))
 fi
 log "voice (Ask button): tap $AX,$AY, wait 3 s, tap again"
+dismiss_dialogs
 SINCE=$(jslines)
 adb shell input tap $AX $AY
 sleep 3
@@ -115,7 +139,7 @@ dump 05-intent-answer
 MSG=$(screen_after "$SINCE")
 log "intent answer on screen: $MSG"
 echo "$MSG" > "$OUT/intent-answer.txt"
-adb logcat -d -s ReactNativeJS:V | tail -n +"$SINCE" | grep -q 'POST /intent -> 200' || fail "intent: no 200 from POST /intent"
+tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /intent -> 200' || fail "intent: no 200 from POST /intent"
 case "$MSG" in
   *"$NO_NET"*) fail "intent: app says it cannot reach the server" ;;
   ""|"Listening."|*"Hold the screen"*|*"allow the microphone"*) fail "intent: no backend answer on screen ($MSG)" ;;
@@ -124,6 +148,7 @@ esac
 # ---- voice: hold the screen 3 s and let go
 sleep 4
 log "voice (hold the screen 3 s)"
+dismiss_dialogs
 SINCE=$(jslines)
 adb shell input swipe $((W / 2)) $((H * 4 / 10)) $((W / 2)) $((H * 4 / 10)) 3000
 if wait_js '\[birr\] POST /intent|intent failed' 60 "$SINCE"; then log "hold-to-ask finished"; else fail "hold-to-ask: POST /intent never answered"; fi
@@ -140,6 +165,7 @@ log "language: tap the language pill"
 LB=$(grep -o 'content-desc="Language: [^"]*"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "$OUT/06-hold-answer.xml" 2>/dev/null | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
 if [ -n "$LB" ]; then
   read -r X1 Y1 X2 Y2 <<<"$(echo "$LB" | tr -c '0-9' ' ')"
+  dismiss_dialogs
   adb shell input tap $(((X1 + X2) / 2)) $(((Y1 + Y2) / 2))
   sleep 6
   shot 07-language
@@ -154,7 +180,7 @@ adb shell pidof $PKG >/dev/null || fail "app died during the test"
 log "end (UTC): $(date -u +%FT%TZ)"
 
 adb logcat -d > "$OUT/logcat-full.txt"
-adb logcat -d -s ReactNativeJS:V AndroidRuntime:E > "$OUT/logcat-js.txt"
+kill $LOGCAT_PID 2>/dev/null || true
 echo "---- ReactNativeJS"
 cat "$OUT/logcat-js.txt"
 if grep -qE 'FATAL EXCEPTION|ReactNativeJS.*(Error|TypeError|Unhandled)|Invariant Violation' "$OUT/logcat-js.txt"; then
