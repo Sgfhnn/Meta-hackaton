@@ -240,3 +240,12 @@ def test_state_parse_is_lenient():
     st = assist.State.parse('{"last_total": 350, "last_notes": [200, 100, 50, "x"], "paid": 500}')
     assert (st.last_total, st.last_notes, st.pending_paid) == (350, [200, 100, 50], 500)
     assert assist.State.parse("not json").last_total is None
+
+
+def test_free_answers_are_cut_to_two_sentences_and_one_script():
+    st = assist.State()
+    d = decision("none", en="One. Two. Three.", am="አንድ ነው። ሁለት ነው። ሦስት ነው።")
+    turn = assist.resolve(d, "q", "am", st)
+    assert (turn.free_en, turn.free_am) == ("One. Two.", "አንድ ነው። ሁለት ነው።")
+    d = decision("none", en="Fold it.", am="ብሩን በطول ያጥፉ።")  # stray Arabic from the model
+    assert assist.resolve(d, "q", "am", st).text == say.ASSIST_OFF_TOPIC

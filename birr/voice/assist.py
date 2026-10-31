@@ -69,8 +69,10 @@ by voice. What they said reaches you through speech recognition, which joins wor
 inside words ("አ5 መቶብር") and misspells words ("ber" for birr), so read through that.
 
 What the app can do (pick exactly one action and call `respond`):
-- scan: the user wants to know how much money they hold ("count my money", "ብሬን ቁጠር", "ስንት ብር \
-አለኝ"). The app opens the camera and guides them.
+- scan: the user wants to know how much money they hold or what a note is ("count my money", \
+"how much is this", "what note is this", "ብሬን ቁጠር", "ይህ ስንት ብር ነው", "ስንት ብር አለኝ"). The app \
+opens the camera, guides them and counts. Choose scan whenever counting or reading notes would \
+answer them; never tell them to tap a button.
 - change: the user wants to check the change they got. Fill paid (birr they handed over) and price \
 (what it cost) only with amounts they actually said, now or earlier in this conversation. If an \
 amount is missing or only partly heard, use null and set needs="ask".
@@ -84,7 +86,8 @@ English, am = Amharic). Only for an explicit request; never because of the langu
 
 Rules:
 - Never invent or guess an amount. Never say a total or a change you were not given below.
-- Keep replies short: one or two spoken sentences, plain words, no lists, no emoji, no markdown.
+- Keep replies short: at most two short spoken sentences (under 30 words), plain words, no \
+lists, no emoji, no markdown.
 - Write reply_en in English and reply_am in natural Amharic (Ge'ez script, polite form) with the \
 same meaning. Write numbers as digits.
 - lang: the user's current language unless action is set_lang.
@@ -269,10 +272,20 @@ def numbers_allowed(text: str, heard: str, state: State, extra: set[int]) -> boo
 
 _ETHIOPIC = re.compile(r"[\u1200-\u137f]")
 _LATIN = re.compile(r"[A-Za-z]")
+_OTHER_SCRIPT = re.compile(r"[^\u1200-\u137f\u0000-\u024f\u2000-\u206f]")  # e.g. Arabic, emoji
+_SENTENCE_END = re.compile(r"(?<=[.!?\u1362\u1367\u1368])\s+")
+MAX_SENTENCES = 2
+MAX_CHARS = 240
 
 
 def looks_amharic(text: str) -> bool:
-    return bool(text) and len(_ETHIOPIC.findall(text)) > 2 * len(_LATIN.findall(text))
+    ok = bool(text) and not _OTHER_SCRIPT.search(text)
+    return ok and len(_ETHIOPIC.findall(text)) > 2 * len(_LATIN.findall(text))
+
+
+def first_sentences(text: str, n: int = MAX_SENTENCES) -> str:
+    """The first n sentences (English . ! ? or Amharic ። ፧ ፨)."""
+    return " ".join(_SENTENCE_END.split(text.strip())[:n])
 
 
 @dataclass
@@ -317,11 +330,13 @@ def resolve(d: dict, heard: str, lang: str, state: State) -> Turn:
     if action == "stop":
         return Turn("stop", lang, text=say.ASSIST_STOP)
     # none: the model's own words, if they pass the checks
-    en, am = d["reply_en"], d["reply_am"]
+    en, am = first_sentences(d["reply_en"]), first_sentences(d["reply_am"])
     extra = {n for n in (d["paid"], d["price"]) if n}
-    ok = bool(en) and len(en) <= 300 and numbers_allowed(en, heard, state, extra)
+    ok = bool(en) and len(en) <= MAX_CHARS and not _OTHER_SCRIPT.search(en)
+    ok = ok and numbers_allowed(en, heard, state, extra)
     if ok and lang == "am":
-        ok = looks_amharic(am) and len(am) <= 300 and numbers_allowed(am, heard, state, extra)
+        ok = looks_amharic(am) and len(am) <= MAX_CHARS
+        ok = ok and numbers_allowed(am, heard, state, extra)
         ok = ok and sorted(_DIGITS.findall(en)) == sorted(_DIGITS.findall(am))
     if not ok:
         return Turn("none", lang, needs=d["needs"], text=say.ASSIST_OFF_TOPIC)
