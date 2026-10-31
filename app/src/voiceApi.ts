@@ -1,7 +1,7 @@
-// Voice calls to our backend (docs/api.md). Gemini runs on the backend; the app holds no keys.
+// Voice calls to our backend (docs/api.md). The models run on the backend; the app holds no keys.
 //   POST /intent   the user's spoken question -> what to do next
 //   GET  /phrases  the app's own prompts in Amharic or Oromo, with clips kept on the phone
-//   GET  /health   whether the backend translates and speaks (Gemini configured)
+//   GET  /health   whether the backend answers in Amharic and Oromo
 
 import { Directory, File, Paths, UploadType } from 'expo-file-system';
 import { Platform } from 'react-native';
@@ -54,13 +54,14 @@ export async function askIntent(audioUri: string, lang: Lang, timeoutMs: number)
   }
 }
 
-/** True when the backend can translate (Gemini configured), so Amharic and Oromo are worth offering. */
+/** True when the backend answers in Amharic and Oromo, so those languages are worth offering. */
 export async function backendTranslates(): Promise<boolean> {
   if (usingMock) return false;
   try {
     const res = await fetch(`${API_URL}/health`);
-    const body = (await res.json()) as { voice?: { gemini?: boolean } };
-    return body.voice?.gemini === true;
+    const body = (await res.json()) as { voice?: { translates?: boolean; gemini?: boolean } };
+    // `translates` (templates, always on); older backends only said `gemini`.
+    return body.voice?.translates === true || body.voice?.gemini === true;
   } catch {
     return false;
   }

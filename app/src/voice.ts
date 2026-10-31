@@ -1,6 +1,6 @@
 // Spoken output. The backend writes the answers (docs/api.md: the app speaks `speech` word for
 // word); the short prompts below are the app's own. English goes through the phone's text-to-speech.
-// Amharic (and Oromo, once the backend enables it) plays as clips the backend made with Gemini.
+// Amharic and Oromo play as clips the backend made with Meta MMS-TTS.
 
 import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
 import * as Speech from 'expo-speech';
