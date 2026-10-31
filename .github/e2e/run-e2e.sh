@@ -147,11 +147,12 @@ esac
 
 # ---- voice: hold the screen 3 s and let go
 sleep 4
-# 6 s: the emulator takes a few seconds to start the recorder (a phone takes well under one).
-log "voice (hold the screen 6 s)"
+# 7.5 s (the app stops by itself at 8 s): the CI emulator can take several seconds to start the
+# recorder (logged as "recording started after N ms"); a phone takes a fraction of a second.
+log "voice (hold the screen 7.5 s)"
 dismiss_dialogs
 SINCE=$(jslines)
-adb shell input swipe $((W / 2)) $((H * 4 / 10)) $((W / 2)) $((H * 4 / 10)) 6000
+adb shell input swipe $((W / 2)) $((H * 4 / 10)) $((W / 2)) $((H * 4 / 10)) 7500
 if wait_js '\[birr\] POST /intent|intent failed' 60 "$SINCE"; then log "hold-to-ask finished"; else fail "hold-to-ask: POST /intent never answered"; fi
 sleep 3
 shot 06-hold-answer
@@ -210,12 +211,13 @@ echo "---- ReactNativeJS"
 cat "$OUT/logcat-js.txt"
 # console.error / red box / unhandled rejections log at E; the app's own console.warn lines (W) are
 # listed for reading, and the checks above already fail on any that broke a flow.
-if grep -qE 'E/ReactNativeJS|FATAL EXCEPTION|Unhandled promise rejection|Invariant Violation' "$OUT/logcat-js.txt"; then
+if grep -qE 'E/ReactNativeJS|Unhandled promise rejection|Invariant Violation' "$OUT/logcat-js.txt"; then
   fail "JS error or crash in logcat"
 fi
 echo "---- app warnings"
 grep 'W/ReactNativeJS' "$OUT/logcat-js.txt" || echo "(none)"
-grep -E "FATAL EXCEPTION|AndroidRuntime" "$OUT/logcat-full.txt" | grep -i "$PKG" && fail "native crash"
+# Only our process: other emulator apps (Gmail, Play services) crash on CI images now and then.
+grep -A1 'FATAL EXCEPTION' "$OUT/logcat-full.txt" | grep -q "Process: $PKG" && fail "native crash in $PKG"
 
 if [ "$FAIL" -ne 0 ]; then log "E2E FAILED"; exit 1; fi
 log "E2E PASSED"

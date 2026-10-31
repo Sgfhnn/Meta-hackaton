@@ -53,6 +53,7 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
   async function start(): Promise<void> {
     if (active.current || wanted.current) return; // already recording, or asking for permission
     wanted.current = true;
+    const asked = Date.now();
     const permission = await requestRecordingPermissionsAsync();
     if (!permission.granted) {
       wanted.current = false;
@@ -77,6 +78,7 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
     }
     active.current = true;
     startedAt.current = Date.now();
+    console.log(`[birr] recording started after ${startedAt.current - asked} ms`);
     setListening(true);
     autoStop.current = setTimeout(() => void stop(), MAX_MS);
     // Let go while the recorder was still starting: stop now instead of recording for MAX_MS.

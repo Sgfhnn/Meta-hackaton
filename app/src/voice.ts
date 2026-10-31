@@ -31,6 +31,7 @@ let installed: Set<string> | null = null;
 const phrases: Partial<Record<Lang, Phrases>> = {};
 let player: AudioPlayer | null = null;
 let clipWatch: ReturnType<typeof setTimeout> | null = null;
+let clipStarted = false;
 
 /** Which of our languages have a voice on this phone. */
 export async function loadVoices(): Promise<Set<Lang>> {
@@ -82,7 +83,14 @@ export function sayQueued(text: string, locale = LOCALE.en): void {
 export function playClip(uri: string, fallback: () => void): void {
   stopSpeaking();
   try {
-    if (!player) player = createAudioPlayer(null);
+    if (!player) {
+      player = createAudioPlayer(null);
+      // isLoaded/playing are both false again once a short clip has finished, so remember that it played.
+      player.addListener('playbackStatusUpdate', (status) => {
+        if (status.playing || status.didJustFinish) clipStarted = true;
+      });
+    }
+    clipStarted = false;
     player.replace({ uri });
     player.play();
   } catch (e) {
@@ -93,7 +101,7 @@ export function playClip(uri: string, fallback: () => void): void {
   const p = player;
   clipWatch = setTimeout(() => {
     clipWatch = null;
-    if (!p.playing && !p.isLoaded) {
+    if (!clipStarted && !p.playing) {
       console.warn('[birr] clip did not start, speaking instead', uri);
       p.pause();
       fallback();
