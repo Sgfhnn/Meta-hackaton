@@ -22,6 +22,12 @@ def boxes(*specs):
     return [Region(box=b, score=s) for b, s in specs]
 
 
+@pytest.fixture(autouse=True)
+def _no_asr_keepalive(monkeypatch):
+    """Tests never ping a real ASR service from the app's lifespan."""
+    monkeypatch.setenv("ASR_KEEPALIVE_S", "0")
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("TRACE_DIR", str(tmp_path))

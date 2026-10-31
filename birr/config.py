@@ -115,6 +115,10 @@ class Settings:
     # come from fixed templates (birr/voice/templates.py) and are spoken by Meta MMS-TTS on the CPU.
     asr_url: str = field(default_factory=lambda: os.getenv("ASR_URL", "").strip().rstrip("/"))
     asr_timeout_s: float = field(default_factory=lambda: float(os.getenv("ASR_TIMEOUT_S", "10")))
+    # Keep the CPU ASR model warm: half a second of silence every N seconds (0 = off).
+    asr_keepalive_s: float = field(
+        default_factory=lambda: float(os.getenv("ASR_KEEPALIVE_S", "60"))
+    )
     intent_timeout_s: float = field(
         default_factory=lambda: float(os.getenv("INTENT_TIMEOUT_S", "15"))
     )

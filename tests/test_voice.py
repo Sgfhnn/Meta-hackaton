@@ -529,6 +529,62 @@ def test_asr_request_shape(voice_env, monkeypatch):
     assert seen["type"] == "audio/m4a" and seen["body"] == SHORT_M4A
 
 
+def test_asr_timeout_grows_with_the_clip(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_TIMEOUT_S", "10")
+    s = Settings()
+    assert asr.timeout_for(0, s) == 10
+    assert asr.timeout_for(88_000, s) == pytest.approx(15.5)  # ~5.5 s of app audio
+    assert asr.timeout_for(10_000_000, s) == 10 + asr.MAX_EXTRA_S  # capped under the app's 30 s
+
+
+def test_asr_timeout_is_sent(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    monkeypatch.setenv("ASR_TIMEOUT_S", "10")
+    seen = {}
+
+    def handler(request):
+        seen["timeout"] = request.extensions["timeout"]["read"]
+        return httpx.Response(200, json={"text": "hi"})
+
+    with_mock(handler, lambda c: asr.transcribe(c, b"x" * 32_000, "audio/m4a", "en", Settings()))
+    assert seen["timeout"] == pytest.approx(12.0)
+
+
+def test_asr_keep_warm_sends_silence_and_survives_errors(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    monkeypatch.setenv("ASR_KEEPALIVE_S", "0.01")
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise httpx.ConnectError("down")  # a failed ping must not end the loop
+        return httpx.Response(200, json={"text": ""})
+
+    async def go(client):
+        task = asyncio.create_task(asr.keep_warm(client, Settings()))
+        while len(calls) < 3:
+            await asyncio.sleep(0.01)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    with_mock(handler, go)
+    assert str(calls[1].url) == "http://127.0.0.1:8002/transcribe?lang=eng_Latn"
+    assert calls[1].headers["content-type"] == "audio/wav"
+    with wave.open(io.BytesIO(calls[1].content)) as w:
+        assert w.getframerate() == 16_000 and w.getnframes() == 8_000
+
+
+def test_asr_keep_warm_off(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    monkeypatch.setenv("ASR_KEEPALIVE_S", "0")
+
+    def handler(request):
+        raise AssertionError("no ping when ASR_KEEPALIVE_S=0")
+
+    assert with_mock(handler, lambda c: asr.keep_warm(c, Settings())) is None
+
+
 @pytest.mark.parametrize(
     "response",
     [httpx.Response(500), httpx.Response(200, text="nope"), httpx.Response(200, json={"x": 1})],

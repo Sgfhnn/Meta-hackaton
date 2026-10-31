@@ -52,9 +52,11 @@ async def lifespan(app: FastAPI):
     app.state.voice = Voice(settings)
     app.state.sessions = assist.Sessions()
     warm = asyncio.create_task(_warm(app.state.voice))
+    asr_warm = asyncio.create_task(asr.keep_warm(app.state.http, settings))
     yield
     warm.cancel()
-    await asyncio.gather(warm, return_exceptions=True)
+    asr_warm.cancel()
+    await asyncio.gather(warm, asr_warm, return_exceptions=True)
     await app.state.jobs.close()
     await app.state.http.aclose()
 
