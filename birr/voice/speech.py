@@ -81,6 +81,37 @@ BAD_AUDIO = "Sorry, I couldn't use that recording. Please ask again."
 NOT_HEARD = "Sorry, I couldn't hear that. Please try again."
 
 
+# Live camera guidance (POST /frame). One sentence per status; cut_off names the side.
+FRAME_OK = "Good. Hold still."
+FRAME_DARK = "It is too dark. Move to more light."
+FRAME_BRIGHT = "Too much glare. Tilt the phone a little or move out of direct light."
+FRAME_BLURRY = "The picture is blurry. Hold the phone still."
+FRAME_NO_NOTES = "I do not see any notes. Point the phone down at your notes."
+FRAME_FAR = "Move the phone closer to the notes."
+FRAME_CUT_LEFT = "Some notes are cut off on the left. Move the phone a little to the left."
+FRAME_CUT_RIGHT = "Some notes are cut off on the right. Move the phone a little to the right."
+FRAME_CUT_TOP = "Some notes are cut off at the top. Move the phone a little away from you."
+FRAME_CUT_BOTTOM = "Some notes are cut off at the bottom. Move the phone a little toward you."
+FRAME = {
+    "ok": FRAME_OK, "dark": FRAME_DARK, "bright": FRAME_BRIGHT, "blurry": FRAME_BLURRY,
+    "no_notes": FRAME_NO_NOTES, "far": FRAME_FAR, "cut_off:left": FRAME_CUT_LEFT,
+    "cut_off:right": FRAME_CUT_RIGHT, "cut_off:top": FRAME_CUT_TOP,
+    "cut_off:bottom": FRAME_CUT_BOTTOM,
+}  # fmt: skip
+
+# The assistant (POST /assist): what it says when code, not the model, writes the answer.
+ASSIST_SCAN = "Okay. Hold the phone over your notes. I will tell you when it looks good."
+ASSIST_HELP = (
+    "I can count your money and check your change. Tap the screen and say count my money, "
+    "or say what you paid and the price."
+)
+ASSIST_REPEAT = "Here it is again."
+ASSIST_STOP = "Okay. Tap the screen when you need me."
+ASSIST_OFF_TOPIC = "I can count your money or check your change. Tap and tell me what you need."
+LANG_SET_EN = "Okay, I will speak English now."
+LANG_SET_AM = "Okay, I will speak Amharic now."
+
+
 def change_prompt(paid: int, price: int) -> str:
     head = f"You paid {paid} birr for {price} birr."
     if paid == price:
@@ -93,6 +124,8 @@ def change_prompt(paid: int, price: int) -> str:
 FIXED = [
     RESCAN, NO_NOTES, GIVE_UP, TRY_AGAIN, TOO_SLOW, SLOW_RESCAN, STILL_COUNTING, BAD_REQUEST,
     NEED_PRICE, VOICE_TODO, COUNT_PROMPT, INTENT_UNKNOWN, PRICE_OVER_PAID, BAD_AUDIO, NOT_HEARD,
+    *FRAME.values(), ASSIST_SCAN, ASSIST_HELP, ASSIST_REPEAT, ASSIST_STOP, ASSIST_OFF_TOPIC,
+    LANG_SET_EN, LANG_SET_AM,
 ]  # fmt: skip
 
 # The app's own prompts (app/src/voice.ts PROMPTS, same keys and English). GET /phrases returns
@@ -109,6 +142,13 @@ APP_PHRASES = {
     "tooShort": "Hold the screen while you speak, then let go.",
     "micNeeded": "To ask by voice, allow the microphone. You can still tap to count.",
     "heardFailed": "Sorry, I couldn't hear that. Please try again.",
+    "greeting": (
+        "Hi, I'm Birr. Put your notes flat on a table. Tap anywhere and tell me what you need, "
+        "like count my money."
+    ),
+    "chooseLanguage": "Tap the top half for English, or the bottom half for Amharic.",
+    "holdStill": "Hold still, counting.",
+    "thinking": "One moment.",
 }
 
 

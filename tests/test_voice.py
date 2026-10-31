@@ -481,6 +481,7 @@ def test_errors_use_templates(voice_client):
 def test_health_reports_voice(voice_client, monkeypatch):
     assert voice_client.get("/health").json()["voice"] == {
         "hears": "gemini", "intent": True, "translates": True, "tts": "mms", "speaks": ["am"],
+        "assist": True,
     }  # fmt: skip
     monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
     assert voice_client.get("/health").json()["voice"]["hears"] == "omnilingual"
@@ -489,6 +490,7 @@ def test_health_reports_voice(voice_client, monkeypatch):
 def test_health_without_any_voice_engine(client):
     assert client.get("/health").json()["voice"] == {
         "hears": "off", "intent": False, "translates": True, "tts": "off", "speaks": [],
+        "assist": False,
     }  # fmt: skip
 
 

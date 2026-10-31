@@ -22,6 +22,7 @@ from pathlib import Path
 
 from birr.config import Settings
 from birr.voice import localize, mms
+from birr.voice.numbers import WORDS
 
 LANGS = ("en", "am", "om")
 TRANSLATED = ("am", "om")
@@ -89,6 +90,26 @@ class Voice:
             except mms.MmsError as exc:
                 log.warning("speech clip failed: %s", exc)
                 del fields["speech_audio"]
+        return fields
+
+    async def free(self, en: str, lang: str, text: str | None) -> dict:
+        """speech fields for a reply the model wrote (the assistant's `none` turn), already checked
+        by birr/voice/assist.py. Digits become words in code for the voice. Without `text` in
+        `lang`, the English is spoken with speech_todo set."""
+        if lang not in TRANSLATED:
+            return {"speech": {"en": en}}
+        if not text:
+            return {"speech": {"en": en, lang: en}, "speech_todo": f"{lang}: no reply in {lang}"}
+        words = WORDS[lang]
+        spoken = _NUMBER.sub(lambda m: words(int(m[0])), text)
+        fields: dict = {"speech": {"en": en, lang: text}}
+        if self.speaks(lang):
+            clip = self.clip_id(lang, spoken)
+            try:
+                await self.audio(clip)
+                fields["speech_audio"] = f"/speak/{clip}"
+            except mms.MmsError as exc:
+                log.warning("speech clip failed: %s", exc)
         return fields
 
     async def localize_body(self, body: dict, lang: str) -> dict:

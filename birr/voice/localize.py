@@ -19,7 +19,10 @@ from birr.voice.templates import TEMPLATES
 FIXED_NAMES = (
     "RESCAN", "NO_NOTES", "GIVE_UP", "TRY_AGAIN", "TOO_SLOW", "SLOW_RESCAN", "STILL_COUNTING",
     "BAD_REQUEST", "NEED_PRICE", "VOICE_TODO", "COUNT_PROMPT", "INTENT_UNKNOWN", "PRICE_OVER_PAID",
-    "BAD_AUDIO", "NOT_HEARD",
+    "BAD_AUDIO", "NOT_HEARD", "FRAME_OK", "FRAME_DARK", "FRAME_BRIGHT", "FRAME_BLURRY",
+    "FRAME_NO_NOTES", "FRAME_FAR", "FRAME_CUT_LEFT", "FRAME_CUT_RIGHT", "FRAME_CUT_TOP",
+    "FRAME_CUT_BOTTOM", "ASSIST_SCAN", "ASSIST_HELP", "ASSIST_REPEAT", "ASSIST_STOP",
+    "ASSIST_OFF_TOPIC", "LANG_SET_EN", "LANG_SET_AM",
 )  # fmt: skip
 POSITIONS = (
     "far left", "far center", "far right", "middle left", "middle", "middle right",

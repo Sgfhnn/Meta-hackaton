@@ -118,6 +118,10 @@ class Settings:
     intent_timeout_s: float = field(
         default_factory=lambda: float(os.getenv("INTENT_TIMEOUT_S", "15"))
     )
+    # The assistant's Muse turn (POST /assist).
+    assist_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("ASSIST_TIMEOUT_S", "15"))
+    )
     gemini_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_base_url: str = field(
         default_factory=lambda: os.getenv(
