@@ -60,9 +60,12 @@ jobs:
         run: |
           echo "Baking EXPO_PUBLIC_API_URL=$EXPO_PUBLIC_API_URL"
           # x86_64 too, so the same APK runs on the CI emulator (android-e2e.yml) as on phones.
-          ./gradlew assembleRelease --no-daemon \
+          # A private repo's runner has 7 GB: a 6 GB Gradle heap plus the Kotlin daemon and native
+          # builds got the runner killed in R8 ("runner has received a shutdown signal").
+          ./gradlew assembleRelease --no-daemon --max-workers=2 \
             -PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64 \
-            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g"
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m" \
+            -Pkotlin.daemon.jvmargs="-Xmx1536m"
 
       - name: Verify bundle and rename
         working-directory: app/android/app/build/outputs/apk/release
