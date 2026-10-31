@@ -20,10 +20,10 @@ The two final PRs, #15 and #16, merge into each other without conflicts in eithe
 **Backend (#15).** The contract is `docs/api.md`.
 - `SAM_PROVIDER` is `roboflow` (default), `modal` or `off`, and `SAM_OFF=1` still means off. `/health` shows which one is in use.
 - `modal_sam/` is SAM 3.1 (default) or SAM 3 on Modal, behind a Modal access-token pair. Steps are in `modal_sam/README.md`. **Never deployed.** SAM 3.1 has no official recipe for one still photo, so the photo runs as a one-frame video. Compare it with SAM 3 before choosing.
-- `POST /intent` (Gemini) returns `intent` (`count`, `change` or `unknown`), `next` (`scan`, `ask` or `done`), `lang`, `paid` and `price`. No audio or transcript is kept.
+- `POST /intent` (Meta Omnilingual ASR via the local service at `ASR_URL`, then Muse for the intent; Gemini only as fallback) returns `intent` (`count`, `change` or `unknown`), `next` (`scan`, `ask` or `done`), `lang`, `paid` and `price`. No audio or transcript is kept.
 - Answers in Amharic and Oromo come from **fixed templates** (`birr/voice/templates.py`, drafts for Anu to correct), filled in by code. **No model translates, and every number is written by code**: digits on screen, words in the voice (350 → ሦስት መቶ ሃምሳ).
 - `speech_audio` links to `GET /speak/{id}`: a clip from **Meta MMS-TTS** (`facebook/mms-tts-amh`, `facebook/mms-tts-orm`, CPU, no quota), made before the answer returns, for backend-written text only. `GET /phrases?lang=am` returns the app's prompts with clips.
-- Gemini TTS was dropped (10 requests a day on our plan). Gemini now only hears the question; without `GEMINI_API_KEY`, `/intent` answers 501 and everything else still works, including Amharic and Oromo.
+- Gemini TTS was dropped (10 requests a day on our plan). Voice questions now go to Omnilingual ASR (Hark runs it on the box, contract in `docs/api.md` §1.2) and Muse; Gemini is only a fallback. With neither, `/intent` answers 501 and everything else still works. Oromo is text-only by default (`TTS_LANGS=am`): the MMS Oromo voice tested poorly.
 - From the PR review: the lab token is compared in constant time, and uploads are read only up to their size limit.
 
 **App (#16).**
@@ -36,14 +36,14 @@ The two final PRs, #15 and #16, merge into each other without conflicts in eithe
 
 After merging #15:
 1. Keep the current live settings (`SAM_OFF=1`, `MUSE_ONLY_TOTALS=1`, the reference sheets in `REFS_DIR`). Run one uvicorn worker.
-2. For voice: install MMS with `uv sync --extra tts` (CPU PyTorch, transformers and uroman, about 1 GB), and start the server with `uv run --extra tts uvicorn birr.api:app --port 8000` so later syncs keep it. For voice questions, **Anu adds `GEMINI_API_KEY` to the box's `.env`. It never goes into chat.**
+2. For voice: install MMS with `uv sync --extra tts` (CPU PyTorch, transformers and uroman, about 1 GB), and start the server with `uv run --extra tts uvicorn birr.api:app --port 8000` so later syncs keep it. For voice questions, set `ASR_URL=http://127.0.0.1:8002` once Hark's ASR service runs (Gemini key optional, as a fallback; never in chat).
 3. `VOICE_CACHE_DIR` (default `voice_cache/`) must be writable and survive restarts; it holds the clips. Wording is fixed in `birr/voice/templates.py`.
-4. Restart, then check `GET /health`: it should show `"voice": {"intent": true, "translates": true, "tts": "mms", "speaks": ["am", "om"]}`. At startup each voice loads (about 8 s) and the fixed phrases' clips are made in the background (about a minute of CPU). After that: a short sentence about 1 s, a total plus a change check about 3 s.
+4. Restart, then check `GET /health`: it should show `"voice": {"hears": "omnilingual", "intent": true, "translates": true, "tts": "mms", "speaks": ["am"]}`. At startup each voice loads (about 8 s) and the fixed phrases' clips are made in the background (about a minute of CPU). After that: a short sentence about 1 s, a total plus a change check about 3 s.
 5. For the app, after pulling #16, run `cd app && npm install` (new: `expo-audio`, `expo-splash-screen`). Restart Expo with `--clear`, with `EXPO_PUBLIC_API_URL` pointing at the box.
 
 ## 4. First live checks, in order
 
-1. **Real Gemini.** Ask "ስንት ብር አለኝ?" and "I paid 500 for 320" in Amharic and in English. Check `intent`, `next` and the amounts, and read the `/intent` traces.
+1. **Real voice questions.** Ask "ስንት ብር አለኝ?" and "I paid 500 for 320" in Amharic and in English. Check `intent`, `next` and the amounts, and read the `/intent` traces.
 2. **Amharic and Oromo wording and voice.** Anu listens to the MMS clips and corrects `birr/voice/templates.py` and the number words in `birr/voice/numbers.py` (the test list in `tests/test_numbers.py` is the checklist).
 3. **Phone.** Try hold-to-talk, Ask with TalkBack on, the change check, and the offline prompt (airplane mode should play the Amharic "cannot reach the server" clip).
 4. **Oromo.** A native speaker checks the Oromo templates and voice. If they're not good enough yet, set `TTS_LANGS=am`.
@@ -52,7 +52,7 @@ After merging #15:
 
 ## 5. Not verified yet
 
-- Real Gemini for `/intent`. All voice tests used a fake Gemini, including the end-to-end run in `tools/e2e/`. (MMS was tested for real on CPU.)
+- Real voice questions end to end (ASR service + Muse) with Anu's recordings. MMS was tested for real on CPU; Omnilingual by Hark on the box.
 - A Modal GPU deploy.
 - A real Android phone with TalkBack.
 - A native speaker reading the Amharic and Oromo wording.
