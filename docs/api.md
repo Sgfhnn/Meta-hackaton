@@ -20,7 +20,7 @@ The user holds the screen (or taps Ask) and speaks. **Meta Omnilingual ASR** (`o
 | Field | Type | Notes |
 |---|---|---|
 | `audio` | file | m4a (AAC), wav, webm, mp3, ogg or flac, about 10 s at most (`MAX_AUDIO_BYTES`, default 3 MB) |
-| `lang` | string | optional: the app's current language (`am`, `om` or `en`), passed to the recogniser and used when the language can't be told |
+| `lang` | string | the app's current language (`am`, `om` or `en`), the one the user chose. It is passed to the recogniser, and the answer is always in it. Only a request without `lang` is answered in the language heard |
 
 **Response 200**
 ```json
@@ -28,6 +28,7 @@ The user holds the screen (or taps Ask) and speaks. **Meta Omnilingual ASR** (`o
   "intent": "change",
   "next": "scan",
   "lang": "am",
+  "heard_lang": "am",
   "paid": 500,
   "price": 320,
   "speech": {"en": "You paid 500 birr for 320 birr. Your change should be 180 birr. Spread it out, hold the phone over it and tap the screen.", "am": "..."},
@@ -37,7 +38,8 @@ The user holds the screen (or taps Ask) and speaks. **Meta Omnilingual ASR** (`o
 ```
 - `intent`: `count`, `change`, or `unknown` when the question was not understood.
 - `next`: what the app does now. `scan` means the next tap scans with this intent (and `paid`/`price` for a change check). `ask` means speak `speech` and let the user ask again: the question was not understood, an amount is missing, or the price is more than what was paid. `done` means nothing to scan: they paid exactly the price.
-- `lang`: the language the user spoke (`am`, `om` or `en`). The app answers in it.
+- `lang`: the language of the answer (`am`, `om` or `en`): the `lang` the app sent. A guess at the language of the question never switches it, because a few words of Amharic are often heard as English. There is no "change language" intent; the user changes language in the app.
+- `heard_lang`: the language the recogniser or model thought the question was in, or `null`. For diagnosis only; the app ignores it.
 - `paid` and `price`: whole birr, only for `change`; `null` when not said. The model is told never to guess an amount, code checks them, and the answer reads them back to the user before any scan.
 - When the recogniser hears nothing, the answer is `intent: "unknown"`, `next: "ask"` with "Sorry, I couldn't hear that".
 - `speech`, `speech_audio`, `speech_todo`: see §1.1.

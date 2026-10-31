@@ -317,6 +317,92 @@ def test_intent_falls_back_to_the_app_language(voice_client):
 
 
 @pytest.mark.parametrize(
+    "answer, text",
+    [
+        (heard("count", lang="en"), say.COUNT_PROMPT),
+        (heard("change", lang="en", paid=500, price=320), say.change_prompt(500, 320)),
+        (heard("change", lang="om", paid=500), say.NEED_PRICE),
+        (heard("unknown", lang="en"), say.INTENT_UNKNOWN),
+    ],
+)
+def test_intent_answers_in_the_chosen_language(voice_client, answer, text):
+    # The user chose Amharic; a guess that a few words were English (or Oromo) must not switch it.
+    voice_client.state["heard"] = answer
+    body = post_intent(voice_client, lang="am").json()
+    assert body["lang"] == "am"
+    assert body["heard_lang"] == answer["lang"]
+    assert body["speech"] == {"en": text, "am": localize.render(text, "am")[0]}
+    assert body["speech_audio"].startswith("/speak/")
+    assert "speech_todo" not in body
+    trace = json.loads((voice_client.trace_dir / f"{body['trace_id']}.json").read_text())
+    assert trace["lang"] == "am" and trace["heard_lang"] == answer["lang"]
+
+
+def test_intent_english_stays_english(voice_client):
+    voice_client.state["heard"] = heard("count", lang="am")
+    body = post_intent(voice_client, lang="en").json()
+    assert body["lang"] == "en"
+    assert body["speech"] == {"en": say.COUNT_PROMPT}
+    assert "speech_audio" not in body
+
+
+def test_intent_without_lang_uses_the_heard_language(voice_client):
+    voice_client.state["heard"] = heard("count", lang="am")
+    files = {"audio": ("q.m4a", SHORT_M4A, "audio/mp4")}
+    body = voice_client.post("/intent", files=files).json()
+    assert body["lang"] == "am"
+    voice_client.state["heard"] = heard("count", lang=None)
+    assert voice_client.post("/intent", files=files).json()["lang"] == "en"
+
+
+@pytest.fixture
+def asr_client(voice_client, monkeypatch):
+    """voice_client heard through Omnilingual ASR + Muse (the live setup), both mocked."""
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    state = voice_client.state
+    state["transcript"] = "ስንት ብር አለኝ"
+
+    async def transcribe(client, raw, mime, lang, settings):
+        state["asr_lang"] = lang
+        return state["transcript"]
+
+    async def from_text(client, transcript, settings):
+        return state["heard"]
+
+    monkeypatch.setattr(asr, "transcribe", transcribe)
+    monkeypatch.setattr(understand, "from_text", from_text)
+    return voice_client
+
+
+def test_intent_asr_short_amharic_heard_as_english_stays_amharic(asr_client):
+    # The phone report: lang=am, ASR heard 9 characters, Muse said "en", the app got English.
+    asr_client.state["heard"] = heard("count", lang="en")
+    body = post_intent(asr_client, lang="am").json()
+    assert asr_client.state["asr_lang"] == "am"
+    assert body["intent"] == "count" and body["lang"] == "am"
+    assert body["speech"]["am"] == localize.render(say.COUNT_PROMPT, "am")[0]
+    assert body["speech_audio"].startswith("/speak/")
+
+
+def test_intent_asr_silence_is_asked_again_in_amharic(asr_client):
+    asr_client.state["transcript"] = ""
+    body = post_intent(asr_client, lang="am").json()
+    assert (body["intent"], body["next"], body["lang"]) == ("unknown", "ask", "am")
+    assert body["speech"]["am"] == localize.render(say.NOT_HEARD, "am")[0]
+    assert body["speech_audio"].startswith("/speak/")
+
+
+def test_intent_failure_speaks_the_chosen_language(asr_client, monkeypatch):
+    async def broken(client, raw, mime, lang, settings):
+        raise asr.AsrError("down")
+
+    monkeypatch.setattr(asr, "transcribe", broken)
+    r = post_intent(asr_client, lang="am")
+    assert r.status_code == 502
+    assert r.json()["speech"]["am"] == localize.render(say.NOT_HEARD, "am")[0]
+
+
+@pytest.mark.parametrize(
     "kwargs",
     [
         {"audio": b"", "filename": "q.m4a"},

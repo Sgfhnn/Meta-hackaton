@@ -196,15 +196,20 @@ async def scan_status(job_id: str):
 @app.post("/intent")
 async def intent(
     audio: Annotated[UploadFile, File()],
-    lang: Annotated[str, Form()] = "en",
+    lang: Annotated[str | None, Form()] = None,
 ):
     """A spoken question -> what to do next (docs/api.md section 1). Meta Omnilingual ASR hears
     it and Muse turns the transcript into the intent (Gemini only when ASR_URL is not set).
-    Neither the audio nor the transcript is kept."""
+    Neither the audio nor the transcript is kept.
+
+    The answer is in the language the app asked for: the user chose it, and a model's guess at
+    the language of a few words (often wrong for short Amharic clips) must not switch it. Only
+    a request without `lang` is answered in the language that was heard."""
     settings = get_settings()
     voice: Voice = app.state.voice
     trace_id = new_trace_id()
-    hint = lang if lang in LANGS else "en"
+    chosen = lang if lang in LANGS else None
+    hint = chosen or "en"
     trace: dict = {"endpoint": "/intent", "inputs": {"lang": hint}}
     started = time.perf_counter()
 
@@ -241,7 +246,7 @@ async def intent(
     except (asr.AsrError, understand.UnderstandError, gemini.GeminiError) as exc:
         return fail(502, "upstream_error", say.NOT_HEARD, str(exc))
 
-    spoken_lang = heard["lang"] or hint
+    spoken_lang = chosen or heard["lang"] or "en"
     kind, paid, price = heard["intent"], heard["paid"], heard["price"]
     # next: "scan" = start a scan with this intent; "ask" = speak, then record again;
     # "done" = nothing to scan (paid exactly the price).
@@ -264,14 +269,15 @@ async def intent(
         speech = {"speech": {"en": text}}
     timing["total"] = int((time.perf_counter() - started) * 1000)
     trace.update(
-        outcome=kind, next=step, lang=spoken_lang, paid=paid, price=price, speech_en=text,
-        timing_ms=timing,
+        outcome=kind, next=step, lang=spoken_lang, heard_lang=heard["lang"], paid=paid,
+        price=price, speech_en=text, timing_ms=timing,
     )  # fmt: skip
     write_trace(settings.trace_dir, trace_id, trace)
     return {
         "intent": kind,
         "next": step,
         "lang": spoken_lang,
+        "heard_lang": heard["lang"],
         "paid": paid,
         "price": price,
         **speech,
