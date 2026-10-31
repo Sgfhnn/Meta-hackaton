@@ -180,6 +180,26 @@ else
   log "language pill not found"
 fi
 
+# ---- one scan in Amharic: prompts and the answer play as clips from the backend (GET /speak)
+if grep -q 'አማርኛ' "$OUT/07-language.txt" 2>/dev/null; then
+  sleep 10 # let the phrase clips download
+  dismiss_dialogs
+  SINCE=$(jslines)
+  log "scan in Amharic"
+  adb shell input tap $((W / 2)) $((H * 4 / 10))
+  if wait_js 'GET /scan/.* (done|error)|POST /scan -> 200|scan failed' 150 "$SINCE"; then log "Amharic scan finished"; else fail "Amharic scan never finished"; fi
+  sleep 8 # the answer clip plays
+  shot 08-amharic-answer
+  dump 08-amharic-answer
+  MSG=$(screen_after "$SINCE")
+  log "Amharic answer on screen: $MSG"
+  echo "$MSG" > "$OUT/amharic-answer.txt"
+  case "$MSG" in *"$NO_NET"*|*"ሰርቨሩን ማግኘት"*) fail "Amharic scan: app says it cannot reach the server" ;; esac
+  if tail -n +"$SINCE" "$JSLOG" | grep -qE 'clip failed|clip did not start'; then fail "Amharic clip did not play"; fi
+else
+  log "Amharic not offered (backend /health said no translation?)"
+fi
+
 sleep 2
 adb shell pidof $PKG >/dev/null || fail "app died during the test"
 log "end (UTC): $(date -u +%FT%TZ)"
