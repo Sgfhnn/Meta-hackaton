@@ -86,7 +86,8 @@ tap_talk() {
   local mark
   mark=$(jslines)
   adb shell input tap $((W / 2)) $((H * 4 / 10))
-  wait_js 'recording started' 25 "$mark" || log "recorder start not logged within 25 s"
+  # a fresh recording, or a hands-free take that the tap turned into a manual one
+  wait_js 'recording started|listen: manual' 25 "$mark" || log "recorder start not logged within 25 s"
   sleep "$1"
   adb shell input tap $((W / 2)) $((H * 4 / 10))
 }
@@ -95,7 +96,7 @@ hold_talk() {
   local mark x=$((W / 2)) y=$((H * 4 / 10))
   mark=$(jslines)
   adb shell input motionevent DOWN $x $y
-  wait_js 'recording started' 25 "$mark" || log "recorder start not logged within 25 s"
+  wait_js 'recording started|listen: manual' 25 "$mark" || log "recorder start not logged within 25 s"
   sleep "$1"
   adb shell input motionevent UP $x $y
 }
@@ -182,6 +183,19 @@ grep -q 'content-desc="Talk to Birr"' "$OUT/02-greeting.xml" 2>/dev/null || fail
 grep -q 'Built with Muse Spark Open' "$OUT/02-greeting.txt" || fail "'Built with Muse Spark Open' not on the main screen"
 grep -q 'content-desc="Ask a question"' "$OUT/02-greeting.xml" 2>/dev/null && fail "the old Ask button is still there"
 
+# ---- 1b. hands-free: after the greeting the app opens the microphone by itself; the emulator
+# microphone hears silence, so the take ends quietly ("no speech") and nothing is sent.
+GREET_SINCE=$SINCE
+if wait_js '\[birr\] listen: auto-start' 40 "$GREET_SINCE"; then log "hands-free listening started after the greeting"; else fail "hands-free: no '[birr] listen: auto-start' after the greeting"; fi
+if wait_js '\[birr\] listen: auto-stop' 40 "$GREET_SINCE"; then log "hands-free: $(tail -n +"$GREET_SINCE" "$JSLOG" | grep -o 'listen: auto-stop.*' | head -1)"; else fail "hands-free: no '[birr] listen: auto-stop'"; fi
+# It must not have listened while the greeting was still being spoken.
+GREETED_AT=$(tail -n +"$GREET_SINCE" "$JSLOG" | grep -n "screen: Hi, I'm Birr" | head -1 | cut -d: -f1)
+STARTED_AT=$(tail -n +"$GREET_SINCE" "$JSLOG" | grep -n 'listen: auto-start' | head -1 | cut -d: -f1)
+[ -n "$GREETED_AT" ] && [ -n "$STARTED_AT" ] && [ "$STARTED_AT" -lt "$GREETED_AT" ] && fail "hands-free: listening started before the greeting"
+tail -n +"$GREET_SINCE" "$JSLOG" | grep -q 'listen: auto-stop (no speech)' &&
+  tail -n +"$GREET_SINCE" "$JSLOG" | grep -q 'POST /assist' && fail "hands-free: a silent take was sent to /assist"
+sleep 3
+
 # ---- 2. tap to talk
 log "tap to talk: tap, 4 s, tap"
 dismiss_dialogs
@@ -226,6 +240,42 @@ shot 05-hold
 tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /assist lang=en -> 200' || fail "hold to talk: no 200 from POST /assist"
 no_net_check "hold to talk" "$(screen_after "$SINCE")"
 
+# ---- 4b. voice commands while the camera is open (typed, as the recogniser would pass them on):
+# "take it" takes the photo now; "cancel" closes the camera without a scan.
+sleep 3
+log "camera command: take it"
+dismiss_dialogs
+SINCE=$(jslines)
+link_turn "count my money"
+if wait_js 'guidance start' 60 "$SINCE"; then log "take-it: guidance started"; else fail "take-it: guidance never started"; fi
+if wait_js 'listen: auto \(camera.*camera open\)|listen: auto \(.*camera open\)' 30 "$SINCE"; then log "take-it: listening while the camera is open"; else fail "take-it: not listening while the camera is open"; fi
+sleep 2
+link_turn "take it"
+if wait_js 'camera command: capture' 40 "$SINCE"; then log "take-it: /assist said capture"; else fail "take-it: no capture action"; fi
+if wait_js 'guidance end: tapped' 30 "$SINCE"; then log "take-it: guidance ended (tapped)"; else fail "take-it: guidance did not end by the voice command"; fi
+if wait_js '\[birr\] POST /scan' 60 "$SINCE"; then log "take-it: photo sent to /scan"; else fail "take-it: no /scan after capture"; fi
+tail -n +"$SINCE" "$JSLOG" | grep -o 'POST /assist .*' | tee "$OUT/take-it-assist.txt"
+grep -q 'action=capture' "$OUT/take-it-assist.txt" || fail "take-it: /assist did not answer action=capture"
+wait_js "$SCAN_DONE" 150 "$SINCE" || fail "take-it: scan never finished"
+settle_scans take-it "$SINCE"
+
+log "camera command: cancel"
+dismiss_dialogs
+SINCE=$(jslines)
+link_turn "count my money"
+if wait_js 'guidance start' 60 "$SINCE"; then log "cancel: guidance started"; else fail "cancel: guidance never started"; fi
+sleep 2
+link_turn "cancel"
+if wait_js 'camera command: stop' 40 "$SINCE"; then log "cancel: /assist said stop"; else fail "cancel: no stop action"; fi
+if wait_js 'guidance end: cancelled' 30 "$SINCE"; then log "cancel: camera closed"; else fail "cancel: guidance did not end by the voice command"; fi
+sleep 6
+tail -n +"$SINCE" "$JSLOG" | grep -q '\[birr\] POST /scan' && fail "cancel: a photo was still sent to /scan"
+MSG=$(screen_after "$SINCE")
+log "cancel answer on screen: $MSG"
+case "$MSG" in *"closed the camera"*) ;; *) fail "cancel: the app did not say it closed the camera ($MSG)" ;; esac
+if wait_js 'listen: auto \(reply' 30 "$SINCE"; then log "cancel: listening again after the reply"; else fail "cancel: no hands-free listening after the reply"; fi
+settle_scans cancel "$SINCE"
+
 # ---- 5. switch to Amharic by voice (typed), then Amharic must stay Amharic
 sleep 3
 log "typed turn: speak Amharic"
@@ -234,6 +284,7 @@ SINCE=$(jslines)
 link_turn "please speak Amharic"
 if wait_js '\[birr\] POST /assist .*action=set_lang lang=am' 60 "$SINCE"; then log "assist switched to Amharic"; else fail "speak Amharic: no set_lang to am"; fi
 wait_js '\[birr\] lang: am' 10 "$SINCE" || fail "the app did not switch to Amharic"
+wait_js 'listen: auto \(reply' 40 "$SINCE" || fail "hands-free: no listening after the language reply"
 sleep 12 # the confirmation clip plays; the phrase clips download
 dismiss_dialogs
 shot 06-amharic

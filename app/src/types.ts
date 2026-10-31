@@ -98,7 +98,7 @@ export type JobStatus = Partial<Spoken> & {
 };
 
 // POST /assist: one turn of the voice assistant (docs/api.md section 7).
-export type AssistAction = 'none' | 'scan' | 'change' | 'set_lang' | 'repeat' | 'help' | 'stop';
+export type AssistAction = 'none' | 'scan' | 'change' | 'set_lang' | 'repeat' | 'help' | 'stop' | 'capture';
 
 export type AssistResponse = Spoken & {
   action: AssistAction;
@@ -119,6 +119,7 @@ export type AssistState = {
   last_notes: number[];
   pending_paid: number | null;
   pending_price: number | null;
+  camera_open?: boolean; // live guidance is running ("take it" / "stop" act on the camera)
 };
 
 // POST /frame: is this small camera frame good enough to count? (docs/api.md section 8)

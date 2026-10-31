@@ -18,6 +18,7 @@ import { savedLang, saveLang } from './src/settings';
 import type { AssistResponse, AssistState, Lang, PhraseKey, ScanRequest, Spoken } from './src/types';
 import { useVoiceQuestion, type Recording } from './src/useVoiceQuestion';
 import {
+  isAppSpeaking,
   loadVoices,
   playClip,
   promptText,
@@ -27,6 +28,7 @@ import {
   setPhrases,
   speakAnswer,
   stopSpeaking,
+  whenQuiet,
 } from './src/voice';
 import { askIntent, backendTranslates, fetchPhrases, type IntentOutcome } from './src/voiceApi';
 
@@ -39,6 +41,10 @@ const TICK_MS = 2_000; // docs/api.md: a soft tick every 2 s, so silence never m
 const STILL_COUNTING_AT_TICK = 5; // docs/api.md: "Still counting." once, after about 10 s
 const GUIDE_START_MS = 3_500; // let "hold the phone over your notes" finish before the first hint
 const REGUIDE_AFTER_MS = 6_000; // after a "move this note" answer, look again by itself
+const LISTEN_AFTER_MS = 400; // after the app stops speaking, before the microphone opens
+// TalkBack reads the new screen text after our own voice: give it time before listening.
+const talkBackMs = (text: string) => Math.min(6_000, 1_000 + 60 * text.length);
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // A change check set up by voice applies to the next scans for this long.
 const CHANGE_TTL_MS = 5 * 60_000;
 // Oromo is parked: the backend still answers in it, but the app does not offer it until a
@@ -76,6 +82,12 @@ export default function App() {
   const [lang, setLangState] = useState<Lang | null>(() => savedLang());
   const langRef = useRef<Lang>(lang ?? 'en');
   const question = useVoiceQuestion(onRecorded);
+  // Hands-free: the app listens by itself after it speaks. "Stop" pauses it until the next tap.
+  const handsFree = useRef(true);
+  const listenToken = useRef(0); // a newer listen request cancels an older one still waiting
+  const screenReader = useRef(false);
+  const shown = useRef(''); // the last screen text (TalkBack reads it)
+  const commandBusy = useRef(false); // a voice command during guidance is at the backend
 
   const current = () => langRef.current;
   function setModeBoth(m: Mode) {
@@ -86,7 +98,13 @@ export default function App() {
   useEffect(() => {
     loadVoices();
     backendTranslates();
-    AccessibilityInfo.isScreenReaderEnabled().then((on) => console.log(`[birr] screen reader: ${on ? 'on' : 'off'}`));
+    AccessibilityInfo.isScreenReaderEnabled().then((on) => {
+      screenReader.current = on;
+      console.log(`[birr] screen reader: ${on ? 'on' : 'off'}`);
+    });
+    const sr = AccessibilityInfo.addEventListener('screenReaderChanged', (on) => {
+      screenReader.current = on;
+    });
     // First launch: ask for the language by voice, in English and then in Amharic.
     if (savedLang() === null) {
       console.log('[birr] screen: choose a language');
@@ -98,6 +116,7 @@ export default function App() {
         });
       });
     }
+    return () => sr.remove();
   }, []);
 
   // birr://assist?text=count%20my%20money: a typed turn (Android shortcuts, and the E2E test).
@@ -125,6 +144,7 @@ export default function App() {
   // What the screen says, in logcat too (ReactNativeJS), so a tester can follow it.
   useEffect(() => {
     if (message) console.log(`[birr] screen: ${message}`);
+    shown.current = message;
   }, [message]);
 
   useEffect(() => {
@@ -267,6 +287,7 @@ export default function App() {
     guideStop.current = null;
     setModeBoth('guiding');
     console.log(`[birr] guidance start (attempt ${attempt.current})`);
+    void listenSoon('camera'); // "take it", "stop", "speak Amharic" work while the camera is open
     const end: GuideEnd = await guide({
       startDelayMs: GUIDE_START_MS,
       takeFrame: async () => {
@@ -276,6 +297,11 @@ export default function App() {
       check: (uri) => checkFrame(uri, current(), FRAME_TIMEOUT_MS),
       hint: (frame) => {
         if (frame.ready) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        if (question.isAuto() && question.heardSpeech()) {
+          // The user is talking: show the hint, do not talk over them.
+          setMessage(frame.speech[current()] ?? frame.speech.en ?? '');
+          return;
+        }
         const shown = speakAnswer(frame.speech, current(), frame.speech_audio, !frame.speech_todo);
         if (shown) setMessage(shown);
       },
@@ -288,8 +314,12 @@ export default function App() {
       return;
     }
     // ready, tapped, the 30 s cap, or a backend without /frame: take the photo now.
+    stopAutoListening();
     const again = await run(takeFullPhoto, 'holdStill');
-    if (!again) return;
+    if (!again) {
+      void listenSoon('reply');
+      return;
+    }
     // The answer asked the user to move a note: give them time, then look again by itself.
     guideStop.current = null;
     setModeBoth('guiding');
@@ -302,10 +332,45 @@ export default function App() {
     await guideAndCount();
   }
 
+  // ---- hands-free: listen by itself once the app has finished speaking
+  async function listenSoon(why: string) {
+    if (!handsFree.current) return;
+    const token = ++listenToken.current;
+    await sleep(LISTEN_AFTER_MS); // let the voice that was just asked for start
+    await whenQuiet(); // never record the app's own voice
+    if (screenReader.current) {
+      const ms = talkBackMs(shown.current);
+      console.log(`[birr] listen: waiting ${ms} ms for TalkBack`);
+      await sleep(ms);
+      await whenQuiet();
+    }
+    if (token !== listenToken.current || !handsFree.current) return;
+    // "stop" / "take it" during guidance: let the camera loop wind down first.
+    for (let i = 0; i < 50 && modeRef.current === 'guiding' && guideStop.current; i++) await sleep(100);
+    if (token !== listenToken.current) return;
+    const m = modeRef.current;
+    if (m === 'thinking' || m === 'counting' || question.listening || commandBusy.current) return;
+    if (m === 'guiding' && guideStop.current) return;
+    console.log(`[birr] listen: auto (${why}${m === 'guiding' ? ', camera open' : ''})`);
+    void question.start('auto', { appSpeaking: isAppSpeaking });
+  }
+
+  function stopAutoListening() {
+    listenToken.current += 1;
+    if (question.isAuto()) void question.cancel();
+  }
+
   // ---- talking: tap the screen (tap again to send) or hold it and let go
   async function startListening(hold: boolean) {
     if (modeRef.current === 'counting' || modeRef.current === 'thinking') {
       sayPrompt('busy', current(), true);
+      return;
+    }
+    handsFree.current = true; // any tap or hold turns hands-free back on after "stop"
+    if (question.isAuto()) {
+      // Already listening hands-free: keep that audio and let the user finish by hand.
+      holding.current = hold;
+      void question.start(hold ? 'hold' : 'tap');
       return;
     }
     if (modeRef.current === 'guiding') {
@@ -325,12 +390,20 @@ export default function App() {
   }
 
   function onScreenPress() {
-    if (question.listening || starting.current) {
-      void question.stop();
-      return;
-    }
+    handsFree.current = true;
     if (modeRef.current === 'guiding') {
       guideStop.current = 'tapped'; // take the photo now
+      stopAutoListening();
+      return;
+    }
+    if (question.isAuto()) {
+      // Hands-free take running: speech heard -> send it now; nothing yet -> the user takes over.
+      if (question.heardSpeech()) void question.stop();
+      else void startListening(false);
+      return;
+    }
+    if (question.listening || starting.current) {
+      void question.stop();
       return;
     }
     void startListening(false);
@@ -344,6 +417,12 @@ export default function App() {
   }
 
   function onRecorded(recording: Recording) {
+    if (recording.kind === 'nothing' || recording.kind === 'interrupted') {
+      // Hands-free heard nobody (go idle quietly), or the app spoke first (listen again after).
+      // While the camera is open, keep listening for "take it" / "stop".
+      if (recording.kind === 'interrupted' || modeRef.current === 'guiding') void listenSoon('again');
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (recording.kind === 'denied') announcePrompt('micNeeded');
     else if (recording.kind === 'short') announcePrompt('tooShort');
@@ -353,6 +432,11 @@ export default function App() {
 
   /** One turn: a recording, or typed text (a birr://assist?text=... link, e.g. a shortcut). */
   async function talk(input: { uri: string } | { text: string }) {
+    if (modeRef.current === 'guiding') {
+      void commandTurn(input);
+      return;
+    }
+    if (question.isAuto()) stopAutoListening(); // a typed turn wins over a hands-free take
     if (modeRef.current !== 'idle') {
       sayPrompt('busy', current(), true);
       return;
@@ -362,16 +446,17 @@ export default function App() {
     let next: (() => Promise<void>) | null = null;
     try {
       if (!assistMissing.current) {
-        let result = await assist(input, current(), SESSION_ID, convo.current, ASSIST_TIMEOUT_MS);
+        let result = await assist(input, current(), SESSION_ID, assistState(false), ASSIST_TIMEOUT_MS);
         // A recogniser or Muse hiccup (502, or a gateway 5xx) or a dropped connection: send the
         // same turn once more before saying sorry. A timeout is not retried (30 s is long enough).
         if ((result.kind === 'error' && result.body.error === 'upstream_error') || result.kind === 'network') {
           console.log(`[birr] /assist ${result.kind === 'network' ? 'network error' : 'upstream error'}, retrying once`);
-          result = await assist(input, current(), SESSION_ID, convo.current, ASSIST_TIMEOUT_MS);
+          result = await assist(input, current(), SESSION_ID, assistState(false), ASSIST_TIMEOUT_MS);
         }
         if (result.kind === 'missing') assistMissing.current = true;
         else {
           next = handleAssist(result);
+          if (!next) afterReply(result);
           return;
         }
       }
@@ -383,6 +468,64 @@ export default function App() {
     } finally {
       setModeBoth('idle');
       if (next) void next();
+    }
+  }
+
+  /** After a spoken reply: listen again by itself (an amount asked for, or anything else). */
+  function afterReply(result: Awaited<ReturnType<typeof assist>>) {
+    if (result.kind !== 'ok') return; // errors: wait for a tap, never loop on a broken line
+    const a = result.body;
+    if (a.action === 'stop') {
+      handsFree.current = false;
+      listenToken.current += 1;
+      console.log('[birr] listen: hands-free paused (stop), tap to talk');
+      return;
+    }
+    if (a.heard === false) return; // nothing was heard: do not keep reopening the microphone
+    void listenSoon(a.needs === 'ask' ? 'needs an amount' : 'reply');
+  }
+
+  function assistState(cameraOpen: boolean): AssistState {
+    return { ...convo.current, camera_open: cameraOpen };
+  }
+
+  /** A voice (or typed) command while the camera is open: take it, stop, switch language... */
+  async function commandTurn(input: { uri: string } | { text: string }) {
+    if (commandBusy.current) return;
+    commandBusy.current = true;
+    try {
+      let result = await assist(input, current(), SESSION_ID, assistState(true), ASSIST_TIMEOUT_MS);
+      if ((result.kind === 'error' && result.body.error === 'upstream_error') || result.kind === 'network') {
+        result = await assist(input, current(), SESSION_ID, assistState(true), ASSIST_TIMEOUT_MS);
+      }
+      if (result.kind !== 'ok' || modeRef.current !== 'guiding') return;
+      const a = result.body;
+      console.log(`[birr] camera command: ${a.action}`);
+      switch (a.action) {
+        case 'capture':
+          guideStop.current = 'tapped';
+          announceAnswer(a, current(), 'holdStill');
+          return;
+        case 'stop':
+          guideStop.current = 'cancelled';
+          announceAnswer(a, current(), 'heardFailed');
+          return;
+        case 'set_lang': {
+          const next = OFFERED.includes(a.lang) ? a.lang : current();
+          chooseLanguage(next, false);
+          announceAnswer(a, next, 'heardFailed');
+          return;
+        }
+        case 'scan':
+        case 'change':
+          return; // already looking
+        default:
+          if (a.heard !== false) announceAnswer(a, current(), 'heardFailed');
+      }
+    } finally {
+      commandBusy.current = false;
+      if (modeRef.current === 'guiding' && !guideStop.current) void listenSoon('camera');
+      else if (guideStop.current === 'cancelled') void listenSoon('reply');
     }
   }
 
@@ -473,7 +616,10 @@ export default function App() {
     if (!welcomed.current) {
       welcomed.current = true;
       // Give the Amharic phrase clips a moment to arrive.
-      setTimeout(() => announcePrompt('greeting'), current() === 'en' ? 300 : 1500);
+      setTimeout(() => {
+        announcePrompt('greeting');
+        void listenSoon('greeting');
+      }, current() === 'en' ? 300 : 1500);
     }
   }
 

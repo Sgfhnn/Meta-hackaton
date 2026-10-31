@@ -61,6 +61,31 @@ export function pickSpeech(speech: SpeechText, lang: Lang): { text: string; loca
   return { text: speech.en ?? '', locale: LOCALE.en };
 }
 
+/** True while the app is saying something (text-to-speech, a clip, or a clip about to start). */
+export async function isAppSpeaking(): Promise<boolean> {
+  if (clipWatch && !clipStarted) return true; // a clip was asked for and has not started yet
+  try {
+    if (player?.playing) return true;
+  } catch {
+    // no player yet
+  }
+  try {
+    return await Speech.isSpeakingAsync();
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve once the app has been quiet for two checks in a row (or after `capMs`). */
+export async function whenQuiet(capMs = 30_000): Promise<void> {
+  const until = Date.now() + capMs;
+  let quiet = 0;
+  while (quiet < 2 && Date.now() < until) {
+    quiet = (await isAppSpeaking()) ? 0 : quiet + 1;
+    if (quiet < 2) await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
 /** Stop whatever is being said: text-to-speech and clips. */
 export function stopSpeaking(): void {
   Speech.stop();
