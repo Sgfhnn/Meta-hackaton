@@ -183,9 +183,13 @@ adb logcat -d > "$OUT/logcat-full.txt"
 kill $LOGCAT_PID 2>/dev/null || true
 echo "---- ReactNativeJS"
 cat "$OUT/logcat-js.txt"
-if grep -qE 'FATAL EXCEPTION|ReactNativeJS.*(Error|TypeError|Unhandled)|Invariant Violation' "$OUT/logcat-js.txt"; then
+# console.error / red box / unhandled rejections log at E; the app's own console.warn lines (W) are
+# listed for reading, and the checks above already fail on any that broke a flow.
+if grep -qE 'E/ReactNativeJS|FATAL EXCEPTION|Unhandled promise rejection|Invariant Violation' "$OUT/logcat-js.txt"; then
   fail "JS error or crash in logcat"
 fi
+echo "---- app warnings"
+grep 'W/ReactNativeJS' "$OUT/logcat-js.txt" || echo "(none)"
 grep -E "FATAL EXCEPTION|AndroidRuntime" "$OUT/logcat-full.txt" | grep -i "$PKG" && fail "native crash"
 
 if [ "$FAIL" -ne 0 ]; then log "E2E FAILED"; exit 1; fi

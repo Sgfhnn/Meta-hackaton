@@ -7,7 +7,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
 import { mockIntent } from './mock';
-import { API_URL, usingMock } from './scan';
+import { API_URL, filePart, postForm, usingMock } from './scan';
 import type { IntentResponse, Lang, Phrases, ScanError } from './types';
 
 export type IntentOutcome =
@@ -22,27 +22,12 @@ export async function askIntent(audioUri: string, lang: Lang, timeoutMs: number)
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    let status: number;
-    let text: string;
-    if (Platform.OS === 'web') {
-      // Browsers record WebM; the backend accepts it.
-      const blob = await (await fetch(audioUri)).blob();
-      const form = new FormData();
-      form.append('audio', blob, blob.type.includes('webm') ? 'question.webm' : 'question.m4a');
-      form.append('lang', lang);
-      const res = await fetch(`${API_URL}/intent`, { method: 'POST', body: form, signal: controller.signal });
-      status = res.status;
-      text = await res.text();
-    } else {
-      // fetch + FormData file uri: works in standalone APKs (File.upload did not reach the server).
-      const form = new FormData();
-      // AAC in .m4a (RecordingPresets.HIGH_QUALITY)
-      form.append('audio', { uri: audioUri, name: 'question.m4a', type: 'audio/mp4' } as unknown as Blob);
-      form.append('lang', lang);
-      const res = await fetch(`${API_URL}/intent`, { method: 'POST', body: form, signal: controller.signal });
-      status = res.status;
-      text = await res.text();
-    }
+    const form = new FormData();
+    // Phones record AAC in .m4a (RecordingPresets.HIGH_QUALITY); browsers record WebM. The backend takes both.
+    const part = await filePart(audioUri, 'question.m4a', 'audio/mp4');
+    form.append('audio', part, part.type?.includes('webm') ? 'question.webm' : 'question.m4a');
+    form.append('lang', lang);
+    const { status, text } = await postForm(`${API_URL}/intent`, form, controller.signal);
     console.log(`[birr] POST /intent -> ${status}`);
     const body = JSON.parse(text);
     return status === 200 ? { kind: 'ok', body: body as IntentResponse } : { kind: 'error', body: body as ScanError };
@@ -54,18 +39,24 @@ export async function askIntent(audioUri: string, lang: Lang, timeoutMs: number)
   }
 }
 
-/** True when the backend answers in Amharic and Oromo, so those languages are worth offering. */
-export async function backendTranslates(): Promise<boolean> {
+/**
+ * True when the backend answers in Amharic and Oromo, so those languages are worth offering.
+ * Tries a few times: right after the app opens the network is sometimes not up yet.
+ */
+export async function backendTranslates(tries = 3): Promise<boolean> {
   if (usingMock) return false;
-  try {
-    const res = await fetch(`${API_URL}/health`);
-    const body = (await res.json()) as { voice?: { translates?: boolean; gemini?: boolean } };
-    // `translates` (templates, always on); older backends only said `gemini`.
-    return body.voice?.translates === true || body.voice?.gemini === true;
-  } catch (e) {
-    console.warn('[birr] health check failed', e);
-    return false;
+  for (let i = 1; i <= tries; i++) {
+    try {
+      const res = await fetch(`${API_URL}/health`);
+      const body = (await res.json()) as { voice?: { translates?: boolean; gemini?: boolean } };
+      // `translates` (templates, always on); older backends only said `gemini`.
+      return body.voice?.translates === true || body.voice?.gemini === true;
+    } catch (e) {
+      console.warn(`[birr] health check failed (try ${i} of ${tries})`, e);
+      if (i < tries) await new Promise((r) => setTimeout(r, 3000));
+    }
   }
+  return false;
 }
 
 /**

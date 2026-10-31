@@ -53,22 +53,46 @@ function formFields(req: ScanRequest): Record<string, string> {
   return fields;
 }
 
+/**
+ * POST a multipart form with XMLHttpRequest. On a phone, React Native's own networking sends file
+ * parts given as { uri, name, type }. Not fetch: Expo SDK 58 replaces the global fetch with
+ * expo/fetch, which rejects those parts ("Unsupported FormDataPart implementation"), and
+ * expo-file-system's File.upload never reached the server in the release APK either.
+ */
+export function postForm(url: string, form: FormData, signal: AbortSignal): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const onAbort = () => xhr.abort();
+    xhr.open('POST', url);
+    xhr.onload = () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve({ status: xhr.status, text: xhr.responseText });
+    };
+    xhr.onerror = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(new Error(`network error posting to ${url}`));
+    };
+    xhr.onabort = () => reject(new Error('aborted'));
+    if (signal.aborted) {
+      reject(new Error('aborted'));
+      return;
+    }
+    signal.addEventListener('abort', onAbort);
+    xhr.send(form);
+  });
+}
+
+/** A file on the phone as a form part (web: the blob itself). */
+export async function filePart(uri: string, name: string, type: string): Promise<Blob> {
+  if (Platform.OS === 'web') return await (await fetch(uri)).blob();
+  return { uri, name, type } as unknown as Blob;
+}
+
 async function upload(photoUri: string, req: ScanRequest, signal: AbortSignal) {
-  if (Platform.OS === 'web') {
-    // expo-file-system has no web support; the web preview posts a Blob instead.
-    const form = new FormData();
-    form.append('image', await (await fetch(photoUri)).blob(), 'scan.jpg');
-    for (const [k, v] of Object.entries(formFields(req))) form.append(k, v);
-    const res = await fetch(`${API_URL}/scan`, { method: 'POST', body: form, signal });
-    return { status: res.status, text: await res.text() };
-  }
-  // React Native's fetch + FormData with a file uri works in Expo Go and in standalone APKs alike
-  // (expo-file-system File.upload failed before reaching the server in the release APK).
   const form = new FormData();
-  form.append('image', { uri: photoUri, name: 'scan.jpg', type: 'image/jpeg' } as unknown as Blob);
+  form.append('image', await filePart(photoUri, 'scan.jpg', 'image/jpeg'), 'scan.jpg');
   for (const [k, v] of Object.entries(formFields(req))) form.append(k, v);
-  const res = await fetch(`${API_URL}/scan`, { method: 'POST', body: form, signal });
-  return { status: res.status, text: await res.text() };
+  return postForm(`${API_URL}/scan`, form, signal);
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
