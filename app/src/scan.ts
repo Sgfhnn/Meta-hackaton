@@ -4,7 +4,6 @@
 // until the job is done. A backend that answers POST with 200 and the result directly (the older
 // synchronous /scan, or wait=true) is handled too.
 
-import { File, UploadType } from 'expo-file-system';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 
@@ -63,15 +62,13 @@ async function upload(photoUri: string, req: ScanRequest, signal: AbortSignal) {
     const res = await fetch(`${API_URL}/scan`, { method: 'POST', body: form, signal });
     return { status: res.status, text: await res.text() };
   }
-  const res = await new File(photoUri).upload(`${API_URL}/scan`, {
-    uploadType: UploadType.MULTIPART,
-    fieldName: 'image',
-    mimeType: 'image/jpeg',
-    parameters: formFields(req),
-    sessionType: 'foreground',
-    signal,
-  });
-  return { status: res.status, text: res.body };
+  // React Native's fetch + FormData with a file uri works in Expo Go and in standalone APKs alike
+  // (expo-file-system File.upload failed before reaching the server in the release APK).
+  const form = new FormData();
+  form.append('image', { uri: photoUri, name: 'scan.jpg', type: 'image/jpeg' } as unknown as Blob);
+  for (const [k, v] of Object.entries(formFields(req))) form.append(k, v);
+  const res = await fetch(`${API_URL}/scan`, { method: 'POST', body: form, signal });
+  return { status: res.status, text: await res.text() };
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

@@ -3,7 +3,7 @@
 //   GET  /phrases  the app's own prompts in Amharic or Oromo, with clips kept on the phone
 //   GET  /health   whether the backend answers in Amharic and Oromo
 
-import { Directory, File, Paths, UploadType } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
 
 import { mockIntent } from './mock';
@@ -34,16 +34,14 @@ export async function askIntent(audioUri: string, lang: Lang, timeoutMs: number)
       status = res.status;
       text = await res.text();
     } else {
-      const res = await new File(audioUri).upload(`${API_URL}/intent`, {
-        uploadType: UploadType.MULTIPART,
-        fieldName: 'audio',
-        mimeType: 'audio/mp4', // AAC in .m4a (RecordingPresets.HIGH_QUALITY)
-        parameters: { lang },
-        sessionType: 'foreground',
-        signal: controller.signal,
-      });
+      // fetch + FormData file uri: works in standalone APKs (File.upload did not reach the server).
+      const form = new FormData();
+      // AAC in .m4a (RecordingPresets.HIGH_QUALITY)
+      form.append('audio', { uri: audioUri, name: 'question.m4a', type: 'audio/mp4' } as unknown as Blob);
+      form.append('lang', lang);
+      const res = await fetch(`${API_URL}/intent`, { method: 'POST', body: form, signal: controller.signal });
       status = res.status;
-      text = res.body;
+      text = await res.text();
     }
     const body = JSON.parse(text);
     return status === 200 ? { kind: 'ok', body: body as IntentResponse } : { kind: 'error', body: body as ScanError };
