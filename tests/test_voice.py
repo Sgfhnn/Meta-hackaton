@@ -537,3 +537,15 @@ def test_asr_or_muse_failure_is_502(omni_client, failing):
     r = post_intent(omni_client)
     assert r.status_code == 502
     assert r.json()["speech"]["en"] == say.NOT_HEARD
+
+
+def test_unknown_question_keeps_the_app_language(omni_client):
+    omni_client.state["muse"] = heard("unknown", lang="am")  # a guess from a garbled transcript
+    body = post_intent(omni_client, lang="om").json()
+    assert (body["intent"], body["next"], body["lang"]) == ("unknown", "ask", "om")
+    assert body["speech"]["om"] == localize.render(say.INTENT_UNKNOWN, "om")[0]
+
+
+def test_intent_prompts_forbid_guessing_partly_heard_amounts():
+    for prompt in (understand.PROMPT, gemini.INTENT_PROMPT):
+        assert "partly heard" in prompt and "never complete, round or guess" in prompt

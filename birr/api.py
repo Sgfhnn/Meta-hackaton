@@ -241,8 +241,9 @@ async def intent(
     except (asr.AsrError, understand.UnderstandError, gemini.GeminiError) as exc:
         return fail(502, "upstream_error", say.NOT_HEARD, str(exc))
 
-    spoken_lang = heard["lang"] or hint
     kind, paid, price = heard["intent"], heard["paid"], heard["price"]
+    # A question that wasn't understood gives no reliable language: keep the app's.
+    spoken_lang = hint if kind in ("unknown", "silent") else (heard["lang"] or hint)
     # next: "scan" = start a scan with this intent; "ask" = speak, then record again;
     # "done" = nothing to scan (paid exactly the price).
     if kind == "count":

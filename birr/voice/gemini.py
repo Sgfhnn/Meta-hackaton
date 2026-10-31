@@ -59,7 +59,8 @@ have?" or "ስንት ብር አለኝ?".
 right?" or "I paid 500 for something that costs 320."
   - "unknown": anything else, silence or noise.
 - paid and price, only for "change": whole birr as integers. paid is the money they handed \
-over, price is what it cost. Use null for an amount they did not say. Never guess an amount."""
+over, price is what it cost. Use null for an amount they did not say, and also when an amount \
+is only partly heard or uncertain: never complete, round or guess an amount."""
 
 INTENT_SCHEMA = {
     "type": "OBJECT",

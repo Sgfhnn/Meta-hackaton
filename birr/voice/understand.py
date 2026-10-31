@@ -23,7 +23,9 @@ Reply with ONLY JSON:
 - intent: "count" if they want to know how much money they are holding; "change" if they want to \
 check the change they got after paying; "unknown" for anything else, or if nothing was said.
 - paid: the whole birr they handed over. price: the whole birr it cost. Only for "change". Use \
-null for an amount they did not say. Never guess an amount.
+null for an amount they did not say. Use null too when an amount is only partly heard, \
+garbled or uncertain (for example a broken number word): never complete, round or guess an \
+amount. The app will ask again.
 
 Heard: """
 
