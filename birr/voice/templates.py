@@ -57,11 +57,11 @@ AM = {
         "tooShort": "እየተናገሩ ስክሪኑን ይያዙ፣ ከዚያ ይልቀቁ።",
         "micNeeded": "በድምፅ ለመጠየቅ ማይክሮፎኑን ይፍቀዱ። አሁንም ነክተው መቁጠር ይችላሉ።",
         "heardFailed": "ይቅርታ፣ አልሰማሁዎትም። እባክዎ እንደገና ይሞክሩ።",
-        "greeting": "ሰላም፣ ብር ነኝ። ብሮችዎን ጠረጴዛ ላይ ዘርግተው ያስቀምጡ። የትም ቦታ ነክተው የሚፈልጉትን ይንገሩኝ፣"
-        " ለምሳሌ ብሬን ቁጠር።",
+        "greeting": "ሰላም፣ ብር ነኝ። ብሮችዎን ጠረጴዛ ላይ ዘርግተው ያስቀምጡና የሚፈልጉትን ይንገሩኝ፣ ለምሳሌ ብሬን ቁጠር።",
         "chooseLanguage": "ለእንግሊዝኛ የላይኛውን ግማሽ፣ ለአማርኛ የታችኛውን ግማሽ ይንኩ።",
         "holdStill": "ሳያንቀሳቅሱ ይያዙ፣ እየቆጠርኩ ነው።",
         "thinking": "አንድ ጊዜ።",
+        "languageChosen": "እሺ፣ ከአሁን ጀምሮ በአማርኛ እናገራለሁ።",
     },
     # You have 350 birr: one 200, one 100 and one 50.
     "total": "በአጠቃላይ {amount} ብር አለዎት፦ {notes}።",
@@ -155,11 +155,12 @@ OM = {
         "micNeeded": "Sagaleedhaan gaafachuuf maaykiroofoonii hayyami. Ammas tuquun lakkaa'uu"
         " ni dandeessa.",
         "heardFailed": "Dhiifama, si hin dhageenye. Irra deebi'ii yaali.",
-        "greeting": "Akkam, ani Birr. Maallaqa kee minjaala irratti diriirsii kaa'i. Bakka kamiyyuu"
-        " tuqiitii waan barbaaddu natti himi, fakkeenyaaf maallaqa koo lakkaa'i.",
+        "greeting": "Akkam, ani Birr. Maallaqa kee minjaala irratti diriirsii kaa'iitii waan barbaaddu"
+        " natti himi, fakkeenyaaf maallaqa koo lakkaa'i.",
         "chooseLanguage": "Ingiliffaaf walakkaa gubbaa, Afaan Amaaraaf walakkaa jalaa tuqi.",
         "holdStill": "Tasgabbaa'ii qabadhu, lakkaa'aan jira.",
         "thinking": "Xiqqoo eegi.",
+        "languageChosen": "Tole, amma Afaan Oromootiin nan dubbadha.",
     },
     # Oromo keeps the total only; the note-by-note list waits for a native speaker's wording.
     "total": "Waliigala qarshii {amount} qabda.",

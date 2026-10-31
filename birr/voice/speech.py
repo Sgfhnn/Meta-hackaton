@@ -145,12 +145,14 @@ APP_PHRASES = {
     "micNeeded": "To ask by voice, allow the microphone. You can still tap to count.",
     "heardFailed": "Sorry, I couldn't hear that. Please try again.",
     "greeting": (
-        "Hi, I'm Birr. Put your notes flat on a table. Tap anywhere and tell me what you need, "
+        "Hi, I'm Birr. Put your notes flat on a table and tell me what you need, "
         "like count my money."
     ),
     "chooseLanguage": "Tap the top half for English, or the bottom half for Amharic.",
     "holdStill": "Hold still, counting.",
     "thinking": "One moment.",
+    # Said in the chosen language right after the user picks it (the app's language list).
+    "languageChosen": "Okay, I will speak this language now.",
 }
 
 
