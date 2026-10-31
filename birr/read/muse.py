@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from pathlib import Path
 
 import httpx
 
 from birr.config import VALID_DENOMINATIONS, Settings
-from birr.read.prompt import PROMPT
+from birr.read.prompt import COUNT_PROMPT, PROMPT
 
 PRIMARY = "baseten"
 FALLBACK = "cline"
@@ -157,3 +158,55 @@ async def read_notes(
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
         raise MuseError(f"Muse call failed ({reader}): {type(exc).__name__}") from exc
     return parse_labels(text)
+
+
+_WORDS = {
+    "zero": 0, "none": 0, "no": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}  # fmt: skip
+
+
+def parse_count(text: str, denomination: int) -> int:
+    """Pull one note count out of the reply to the count prompt. Raises MuseError if unsure.
+
+    Accepts "2", "2.", "**2**", '{"count": 2}', "There are two notes", "100-birr notes: 2".
+    A mention of the denomination itself ("100 birr", "100-birr") is not taken as the count.
+    """
+    raw = (text or "").strip()
+    for obj in _json_objects(raw):
+        if isinstance(obj, dict):
+            for key in ("count", "notes", "answer", "value"):
+                if isinstance(obj.get(key), int) and not isinstance(obj.get(key), bool):
+                    return obj[key]
+    cleaned = re.sub(rf"\b{denomination}\s*-?\s*(birr|br|ብር)", " ", raw, flags=re.I)
+    numbers = {int(n) for n in re.findall(r"(?<![\d.])\d+(?![\d.]*\d)", cleaned)}
+    if len(numbers) > 1:
+        numbers.discard(denomination)  # "two 100 notes": the 100 names the note, not the count
+    if len(numbers) == 1:
+        return numbers.pop()
+    if not numbers:
+        words = {_WORDS[w] for w in re.findall(r"[a-z]+", cleaned.lower()) if w in _WORDS}
+        if len(words) == 1:
+            return words.pop()
+    raise MuseError("no single count in Muse reply")
+
+
+async def count_notes(
+    client: httpx.AsyncClient, jpeg: bytes, settings: Settings, denomination: int
+) -> int:
+    """Ask Muse how many notes of one denomination the photo holds (COUNT_CHECK)."""
+    url, model, key = _endpoint(settings, PRIMARY)
+    content = [
+        {"type": "text", "text": COUNT_PROMPT.format(d=denomination)},
+        _image(jpeg),
+    ]
+    body = {"model": model, "temperature": 0, "messages": [{"role": "user", "content": content}]}
+    if settings.muse_reasoning_effort:
+        body["reasoning_effort"] = settings.muse_reasoning_effort
+    try:
+        resp = await client.post(url, json=body, headers={"Authorization": f"Bearer {key}"})
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+        raise MuseError(f"Muse count call failed: {type(exc).__name__}") from exc
+    return parse_count(text, denomination)

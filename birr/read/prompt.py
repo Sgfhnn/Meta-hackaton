@@ -36,3 +36,10 @@ How to decide a value:
 Reply with ONLY JSON, no other text:
 {"notes": [{"value": 5|10|50|100|200|null, "evidence": ["latin numeral"|"geez numeral"|"amount text"|"picture"|"colour"], "status": "read"|"unclear"}]}
 Use value null with status "unclear" for a note you cannot identify. Never add up the notes."""
+
+
+# The narrow count check (COUNT_CHECK=1, Claude's spec Oct 31): one call per repeated denomination.
+COUNT_PROMPT = (
+    "How many {d}-birr notes are in this photo? Count whole physical notes, not pieces or layers. "
+    "Reply with ONLY a single integer, no other text."
+)

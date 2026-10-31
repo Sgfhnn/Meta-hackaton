@@ -9,6 +9,8 @@ Rules (docs/api.md):
   count is logged only (path agree_sam_advisory). Disagreement still ends as guide or rescan.
 - SAM unavailable: a Muse-only total is allowed only if MUSE_ONLY_TOTALS is on and two reads
   agree; otherwise rescan, never guide.
+- COUNT_CHECK on: a total whose repeated-denomination counts did not all match (count_check_ok
+  False) becomes a rescan, the same answer as a disagreement (path count_check_mismatch).
 """
 
 from __future__ import annotations
@@ -78,6 +80,7 @@ def decide(
     max_attempts: int,
     muse_only_totals: bool,
     sam_advisory: bool = False,
+    count_check_ok: bool | None = None,
 ) -> dict:
     """Return outcome, total, change, notes, hint and English speech text.
 
@@ -117,6 +120,9 @@ def decide(
     else:
         outcome = "total" if (muse_only_totals and two_reads and agreed) else "rescan"
         path = "agree_no_sam" if outcome == "total" else None
+
+    if outcome == "total" and count_check_ok is False:
+        outcome, path = "rescan", "count_check_mismatch"
 
     result = {"outcome": outcome, "total": None, "change": None, "notes": notes, "hint": None,
               "path": path}  # fmt: skip

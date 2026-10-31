@@ -51,6 +51,10 @@ class Settings:
     # SAM_OFF=1: never call SAM. Pair with MUSE_ONLY_TOTALS=1 so two agreeing reads speak;
     # disagreement then always ends as rescan (no "move this note" hint).
     sam_off: bool = field(default_factory=lambda: _flag("SAM_OFF", False))
+    # COUNT_CHECK=1: when the agreed note list repeats a denomination, ask Muse once per repeated
+    # denomination how many of those notes the photo holds. Any mismatch (or a failed count) turns
+    # the total into a rescan. Targets the same-colour over-split both reads agree on (Oct 31).
+    count_check: bool = field(default_factory=lambda: _flag("COUNT_CHECK", False))
     # Which SAM serves the count: "roboflow" (hosted SAM 3, the default), "modal" (our own SAM 3.1
     # endpoint, see modal_sam/) or "off". SAM_OFF=1 still means off.
     sam_provider: str = field(

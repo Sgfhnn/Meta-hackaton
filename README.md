@@ -41,7 +41,7 @@ Each `/scan` and `/intent` call writes one JSON trace to `TRACE_DIR`. Traces hol
 | `modal` | our own SAM 3.1 (or SAM 3) endpoint on Modal, in `modal_sam/` | `SAM_MODAL_URL`, `SAM_MODAL_KEY`, `SAM_MODAL_SECRET`. Deploy steps: `modal_sam/README.md` |
 | `off` | nothing. Pair it with `MUSE_ONLY_TOTALS=1` so that two agreeing reads can speak a total | — |
 
-`SAM_OFF=1` also means `off`. The live box currently runs `SAM_OFF=1` with `MUSE_ONLY_TOTALS=1`, and SAM stays switchable while the team tests it. `SAM_ADVISORY=1` logs SAM's count without letting it block a total.
+`SAM_OFF=1` also means `off`. The live box currently runs `SAM_OFF=1` with `MUSE_ONLY_TOTALS=1`, and SAM stays switchable while the team tests it. `SAM_ADVISORY=1` logs SAM's count without letting it block a total. `COUNT_CHECK=1` (off by default) asks Muse one extra question per denomination the agreed read lists more than once ("How many 100-birr notes are in this photo?"); the total is spoken only if every count matches, otherwise the scan ends as a rescan. The check is recorded under `count_check` in the trace.
 
 ### Voice
 

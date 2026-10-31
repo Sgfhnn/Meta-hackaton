@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import Counter
 from dataclasses import dataclass
 
 import httpx
 
+from birr.agent import money
 from birr.agent.decide import decide
 from birr.agent.trace import write_trace
 from birr.config import Settings
@@ -120,6 +122,49 @@ async def collect_reads(client, jpeg, settings: Settings, deadline: float, trace
             log.extend({"slot": "late", "ok": False, "error": "cancelled"} for _ in waiting)
 
 
+def repeated_denominations(labels: list[str]) -> dict[int, int]:
+    """Denominations listed more than once in the agreed read, with how many times."""
+    counts = Counter(money.to_denomination(label) for label in labels)
+    return {d: n for d, n in sorted(counts.items()) if d is not None and n > 1}
+
+
+async def count_check(client, jpeg, settings: Settings, labels: list[str], deadline: float):
+    """COUNT_CHECK: one narrow Muse count per repeated denomination, all in parallel.
+
+    Returns the trace entry, or None when no denomination repeats (nothing to check). `ok` is
+    True only when every count came back and equals the agreed read's count for that value.
+    """
+    expected = repeated_denominations(labels)
+    if not expected:
+        return None
+    start = time.perf_counter()
+
+    async def one(d: int) -> dict:
+        t0 = time.perf_counter()
+        try:
+            got = await muse.count_notes(client, jpeg, settings, d)
+        except muse.MuseError as exc:
+            return {"denomination": d, "expected": expected[d], "ok": False,
+                    "error": str(exc), "ms": _ms(t0)}  # fmt: skip
+        return {"denomination": d, "expected": expected[d], "count": got,
+                "ok": got == expected[d], "ms": _ms(t0)}  # fmt: skip
+
+    tasks = [asyncio.create_task(one(d)) for d in expected]
+    left = max(0.0, deadline - time.perf_counter())
+    done, pending = await asyncio.wait(tasks, timeout=left)
+    await _cancel(pending)
+    checks = [t.result() for t in tasks if t in done]
+    checks += [{"denomination": d, "expected": expected[d], "ok": False, "error": "deadline"}
+               for t, d in zip(tasks, expected, strict=True) if t in pending]  # fmt: skip
+    checks.sort(key=lambda c: c["denomination"])
+    return {
+        "calls": len(tasks),
+        "checks": checks,
+        "ok": all(c["ok"] for c in checks),
+        "ms": _ms(start),
+    }
+
+
 async def execute(
     client: httpx.AsyncClient,
     jpeg: bytes,
@@ -188,9 +233,7 @@ async def execute(
         trace.update(outcome="upstream_error", detail="every Muse read failed")
         return finish(502, {"error": "upstream_error"}, say.TRY_AGAIN)
 
-    result = decide(
-        reads,
-        regions,
+    decide_args = dict(
         intent=req.intent,
         paid=req.paid,
         price=req.price,
@@ -199,6 +242,15 @@ async def execute(
         muse_only_totals=settings.muse_only_totals,
         sam_advisory=settings.sam_advisory,
     )
+    result = decide(reads, regions, **decide_args)
+    if settings.count_check and result["outcome"] == "total" and len(reads) >= 2:
+        # Only a total about to be spoken is checked; guides and rescans cost no extra calls.
+        checked = await count_check(client, jpeg, settings, reads[0], deadline)
+        if checked is not None:
+            trace["count_check"] = checked
+            timing["count_check"] = checked["ms"]
+            if not checked["ok"]:
+                result = decide(reads, regions, count_check_ok=False, **decide_args)
     text = result.pop("speech_en")
     trace.update(
         sam_available=regions is not None,
