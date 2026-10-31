@@ -147,17 +147,22 @@ esac
 
 # ---- voice: hold the screen 3 s and let go
 sleep 4
-log "voice (hold the screen 3 s)"
+# 6 s: the emulator takes a few seconds to start the recorder (a phone takes well under one).
+log "voice (hold the screen 6 s)"
 dismiss_dialogs
 SINCE=$(jslines)
-adb shell input swipe $((W / 2)) $((H * 4 / 10)) $((W / 2)) $((H * 4 / 10)) 3000
+adb shell input swipe $((W / 2)) $((H * 4 / 10)) $((W / 2)) $((H * 4 / 10)) 6000
 if wait_js '\[birr\] POST /intent|intent failed' 60 "$SINCE"; then log "hold-to-ask finished"; else fail "hold-to-ask: POST /intent never answered"; fi
 sleep 3
 shot 06-hold-answer
 dump 06-hold-answer
 MSG=$(screen_after "$SINCE")
 log "hold-to-ask answer on screen: $MSG"
-case "$MSG" in *"$NO_NET"*) fail "hold-to-ask: app says it cannot reach the server" ;; esac
+tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /intent -> 200' || fail "hold-to-ask: no 200 from POST /intent"
+case "$MSG" in
+  *"$NO_NET"*) fail "hold-to-ask: app says it cannot reach the server" ;;
+  ""|"Listening."|*"Hold the screen"*|*"allow the microphone"*) fail "hold-to-ask: no backend answer on screen ($MSG)" ;;
+esac
 
 # ---- language switch, then one more scan so the Amharic clips are fetched and played
 sleep 3

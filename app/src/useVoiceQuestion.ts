@@ -79,6 +79,8 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
     startedAt.current = Date.now();
     setListening(true);
     autoStop.current = setTimeout(() => void stop(), MAX_MS);
+    // Let go while the recorder was still starting: stop now instead of recording for MAX_MS.
+    if (!wanted.current) void stop();
   }
 
   return { listening, start, stop };
