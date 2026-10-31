@@ -92,6 +92,7 @@ export async function scan(photoUri: string, req: ScanRequest, timeoutMs: number
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const started = await upload(photoUri, req, controller.signal);
+    console.log(`[birr] POST /scan -> ${started.status}`);
     const body = JSON.parse(started.text);
     if (started.status === 200) return { kind: 'ok', body: body as ScanResponse };
     if (started.status !== 202) return { kind: 'error', body: body as ScanError };
@@ -104,6 +105,7 @@ export async function scan(photoUri: string, req: ScanRequest, timeoutMs: number
         signal: controller.signal,
       });
       const status = (await res.json()) as JobStatus & ScanError;
+      console.log(`[birr] GET /scan/${job.job_id} -> ${res.status} ${status.status}`);
       if (res.status !== 200) return { kind: 'error', body: status };
       if (status.status === 'done' && status.result) return { kind: 'ok', body: status.result };
       if (status.status === 'error') {
@@ -112,7 +114,8 @@ export async function scan(photoUri: string, req: ScanRequest, timeoutMs: number
       }
       wait = status.poll_after_ms ?? DEFAULT_POLL_MS;
     }
-  } catch {
+  } catch (e) {
+    console.warn('[birr] scan failed', controller.signal.aborted ? '(timeout)' : '', e);
     return controller.signal.aborted ? { kind: 'timeout' } : { kind: 'network' };
   } finally {
     clearTimeout(timer);

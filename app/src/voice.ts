@@ -37,7 +37,8 @@ export async function loadVoices(): Promise<Set<Lang>> {
   try {
     const voices = await Speech.getAvailableVoicesAsync();
     installed = new Set(voices.map((v) => v.language.toLowerCase().slice(0, 2)));
-  } catch {
+  } catch (e) {
+    console.warn('[birr] voice list failed', e);
     installed = new Set(['en']);
   }
   return new Set((Object.keys(LOCALE) as Lang[]).filter((l) => l === 'en' || installed!.has(l)));
@@ -84,7 +85,8 @@ export function playClip(uri: string, fallback: () => void): void {
     if (!player) player = createAudioPlayer(null);
     player.replace({ uri });
     player.play();
-  } catch {
+  } catch (e) {
+    console.warn('[birr] clip failed', uri, e);
     fallback();
     return;
   }
@@ -92,6 +94,7 @@ export function playClip(uri: string, fallback: () => void): void {
   clipWatch = setTimeout(() => {
     clipWatch = null;
     if (!p.playing && !p.isLoaded) {
+      console.warn('[birr] clip did not start, speaking instead', uri);
       p.pause();
       fallback();
     }

@@ -59,6 +59,11 @@ export default function App() {
     if (lang !== 'en') fetchPhrases(lang).then((p) => setPhrases(lang, p));
   }, [lang]);
 
+  // What the screen says, in logcat too (ReactNativeJS), so a tester can follow it.
+  useEffect(() => {
+    console.log(`[birr] screen: ${message}`);
+  }, [message]);
+
   useEffect(() => {
     if (permission && !permission.granted) sayPrompt('cameraNeeded', lang);
   }, [permission?.granted]);
@@ -135,7 +140,8 @@ export default function App() {
     let picked: ImagePicker.ImagePickerResult;
     try {
       picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
-    } catch {
+    } catch (e) {
+      console.warn('[birr] photo picker failed', e);
       announcePrompt('failed'); // e.g. no photo library permission: say so, never stay silent
       return;
     }
@@ -160,7 +166,8 @@ export default function App() {
       const result = await scan(jpeg, scanRequest(), SCAN_TIMEOUT_MS);
       clearInterval(ticker);
       handle(result);
-    } catch {
+    } catch (e) {
+      console.warn('[birr] photo or upload prep failed', e);
       clearInterval(ticker);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       announcePrompt('failed');
@@ -238,7 +245,8 @@ export default function App() {
     if (pictureSize === undefined && camera.current) {
       try {
         setPictureSize(choosePictureSize(await camera.current.getAvailablePictureSizesAsync()) ?? '');
-      } catch {
+      } catch (e) {
+        console.warn('[birr] picture sizes unavailable', e);
         setPictureSize(''); // not supported here (e.g. web): keep the camera default
       }
     }
@@ -284,7 +292,8 @@ export default function App() {
         facing="back"
         pictureSize={pictureSize || undefined}
         onCameraReady={onCameraReady}
-        onMountError={() => {
+        onMountError={(e) => {
+          console.warn('[birr] camera mount error', e.message);
           const text = 'The camera could not start. Please close the app and open it again.';
           setMessage(text);
           say(text);

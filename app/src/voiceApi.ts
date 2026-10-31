@@ -43,9 +43,11 @@ export async function askIntent(audioUri: string, lang: Lang, timeoutMs: number)
       status = res.status;
       text = await res.text();
     }
+    console.log(`[birr] POST /intent -> ${status}`);
     const body = JSON.parse(text);
     return status === 200 ? { kind: 'ok', body: body as IntentResponse } : { kind: 'error', body: body as ScanError };
-  } catch {
+  } catch (e) {
+    console.warn('[birr] intent failed', controller.signal.aborted ? '(timeout)' : '', e);
     return controller.signal.aborted ? { kind: 'timeout' } : { kind: 'network' };
   } finally {
     clearTimeout(timer);
@@ -60,7 +62,8 @@ export async function backendTranslates(): Promise<boolean> {
     const body = (await res.json()) as { voice?: { translates?: boolean; gemini?: boolean } };
     // `translates` (templates, always on); older backends only said `gemini`.
     return body.voice?.translates === true || body.voice?.gemini === true;
-  } catch {
+  } catch (e) {
+    console.warn('[birr] health check failed', e);
     return false;
   }
 }
@@ -76,14 +79,15 @@ export async function fetchPhrases(lang: Lang): Promise<Phrases> {
     const res = await fetch(`${API_URL}/phrases?lang=${lang}`);
     if (!res.ok) return {};
     phrases = ((await res.json()) as { phrases?: Phrases }).phrases ?? {};
-  } catch {
+  } catch (e) {
+    console.warn('[birr] phrases fetch failed', e);
     return {};
   }
   const dir = Platform.OS === 'web' ? null : new Directory(Paths.cache, 'phrases');
   try {
     dir?.create({ intermediates: true, idempotent: true });
-  } catch {
-    // no cache folder: play the clips from the server instead
+  } catch (e) {
+    console.warn('[birr] no phrase cache folder', e); // play the clips from the server instead
   }
   for (const phrase of Object.values(phrases)) {
     if (!phrase?.audio) continue;
@@ -95,8 +99,8 @@ export async function fetchPhrases(lang: Lang): Promise<Phrases> {
     try {
       if (!file.exists) await File.downloadFileAsync(remote, file, { idempotent: true });
       phrase.audio = file.uri;
-    } catch {
-      // keep the server link
+    } catch (e) {
+      console.warn('[birr] phrase clip download failed', remote, e); // keep the server link
     }
   }
   return phrases;

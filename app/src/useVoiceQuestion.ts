@@ -35,13 +35,13 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
     const length = Date.now() - startedAt.current;
     try {
       await recorder.stop();
-    } catch {
-      // no file: reported as failed below
+    } catch (e) {
+      console.warn('[birr] recorder.stop failed', e); // no file: reported as failed below
     }
     try {
       await setAudioModeAsync({ allowsRecording: false }); // play answers on the speaker again
-    } catch {
-      // keep going
+    } catch (e) {
+      console.warn('[birr] audio mode reset failed', e);
     }
     if (length < MIN_MS) {
       done.current({ kind: 'short' });
@@ -69,7 +69,8 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
-    } catch {
+    } catch (e) {
+      console.warn('[birr] recording failed to start', e);
       wanted.current = false;
       done.current({ kind: 'failed' });
       return;
