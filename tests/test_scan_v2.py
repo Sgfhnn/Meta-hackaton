@@ -255,3 +255,103 @@ def test_cors_env_origin(monkeypatch):
     assert r.headers.get("access-control-allow-origin") == "https://preview.example"
     monkeypatch.delenv("CORS_ORIGINS")
     importlib.reload(api)
+
+
+# --- SAM off: wait for both reads, no single-read retry --------------------------------------
+
+
+def sam_off(monkeypatch, two_read="0.15", deadline="1.5"):
+    fast(monkeypatch, two_read=two_read, deadline=deadline)
+    monkeypatch.setenv("SAM_OFF", "1")
+    monkeypatch.setenv("MUSE_ONLY_TOTALS", "1")
+
+
+def test_sam_off_both_reads_slow_under_deadline_still_total(client, fake, monkeypatch):
+    # Both reads come back after TWO_READ_TIMEOUT_S but before SCAN_DEADLINE_S.
+    sam_off(monkeypatch)
+    fake["reads"] = [("slow", 0.3, ["100", "50"]), ("slow", 0.5, ["50", "100"])]
+    body = post_scan(client).json()
+    assert body["outcome"] == "total"
+    assert body["total"] == 150
+    trace = trace_of(client, body)
+    assert trace["mode"] == "two_read"
+    assert "retry" not in trace
+    assert fake["seen"]["readers"] == ["baseten", "baseten"]  # never a third read
+    assert trace["wait"]["replaced"] == []
+
+
+def test_sam_off_one_slow_read_is_waited_for_not_dropped(client, fake, monkeypatch):
+    sam_off(monkeypatch)
+    fake["reads"] = [["200"], ("slow", 0.6, ["200"])]
+    body = post_scan(client).json()
+    assert body["outcome"] == "total"
+    assert body["total"] == 200
+    assert len(fake["seen"]["readers"]) == 2
+
+
+def test_sam_off_failed_read_is_replaced_once(client, fake, monkeypatch):
+    sam_off(monkeypatch)
+    fake["reads"] = [["100", "10"], MuseError("bad json"), ["10", "100"]]
+    body = post_scan(client).json()
+    assert body["outcome"] == "total"
+    assert body["total"] == 110
+    trace = trace_of(client, body)
+    assert trace["wait"]["replaced"] == [1]
+    assert len(fake["seen"]["readers"]) == 3
+    slots = [(r["slot"], r["ok"], r.get("replacement", False)) for r in trace["reads"]]
+    assert (1, False, False) in slots and (1, True, True) in slots
+
+
+def test_sam_off_replacement_also_fails_no_total_no_fourth_read(client, fake, monkeypatch):
+    sam_off(monkeypatch)
+    fake["reads"] = [["100"], MuseError("bad json"), MuseError("bad json again")]
+    body = post_scan(client).json()
+    assert body["outcome"] == "rescan"
+    assert body["total"] is None
+    assert len(fake["seen"]["readers"]) == 3
+    assert trace_of(client, body)["wait"]["ended"] == "read_failed_twice"
+
+
+def test_sam_off_deadline_gives_rescan_and_no_third_read(client, fake, monkeypatch):
+    sam_off(monkeypatch, deadline="0.4")
+    fake["reads"] = [["50"], ("slow", 5, ["50"])]
+    start = time.perf_counter()
+    body = post_scan(client).json()
+    assert time.perf_counter() - start < 2
+    assert body["outcome"] == "rescan"
+    assert body["total"] is None
+    trace = trace_of(client, body)
+    assert trace["detail"] == "scan deadline reached"
+    assert trace["mode"] == "two_read_wait"
+    assert trace["wait"]["ended"] == "deadline"
+    assert len(fake["seen"]["readers"]) == 2
+
+
+def test_sam_off_disagreeing_reads_still_rescan(client, fake, monkeypatch):
+    # Safety rule unchanged: waiting longer never turns disagreement into a total.
+    sam_off(monkeypatch)
+    fake["reads"] = [("slow", 0.3, ["100", "50"]), ("slow", 0.4, ["100", "10"])]
+    body = post_scan(client).json()
+    assert body["outcome"] == "rescan"
+    assert body["total"] is None
+
+
+def test_sam_off_needs_muse_only_totals_to_speak(client, fake, monkeypatch):
+    fast(monkeypatch, deadline="1.5")
+    monkeypatch.setenv("SAM_OFF", "1")
+    fake["reads"] = [("slow", 0.3, ["200"]), ("slow", 0.4, ["200"])]
+    assert post_scan(client).json()["total"] is None
+
+
+def test_sam_on_path_still_uses_single_read_retry(client, fake, monkeypatch):
+    fast(monkeypatch)
+    monkeypatch.setenv("SAM_PROVIDER", "roboflow")
+    monkeypatch.delenv("SAM_OFF", raising=False)
+    fake["reads"] = [("slow", 5, ["50"]), ("slow", 5, ["50"]), ["200"]]
+    fake["regions"] = FOUR[:1]
+    body = post_scan(client).json()
+    assert body["total"] is None
+    trace = trace_of(client, body)
+    assert trace["retry"]["used"] == "new_read:baseten"
+    assert "wait" not in trace
+    assert len(fake["seen"]["readers"]) == 3

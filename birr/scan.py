@@ -7,6 +7,11 @@ Flow (docs/api.md section 2):
    back if there is one, else start one more read (on the fallback reader when MUSE_FALLBACK is
    on) and take the first read that finishes before the hard limit.
 4. The whole scan never runs past SCAN_DEADLINE_S. Past it, the answer is a rescan.
+
+SAM off (SAM_OFF=1 or SAM_PROVIDER=off) changes steps 2-3: one read can never speak a total
+there, so a single-read retry only wastes calls. Instead the scan waits for both reads until
+SCAN_DEADLINE_S, replaces a read that errors once (same slot, same prompt), and never starts a
+third read. Past the deadline the answer is a rescan, as before.
 """
 
 from __future__ import annotations
@@ -51,7 +56,7 @@ async def _read(client, jpeg, settings, reader: str, slot: int, with_refs: bool 
 
 async def _sam(client, jpeg, width, height, settings) -> dict:
     start = time.perf_counter()
-    if settings.sam_off or settings.sam_provider == "off":
+    if _sam_disabled(settings):
         return {"ok": False, "error": "disabled", "ms": 0}
     try:
         regions = await sam.segment(client, jpeg, width, height, settings)
@@ -66,9 +71,74 @@ async def _cancel(tasks) -> None:
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def _sam_disabled(settings: Settings) -> bool:
+    return settings.sam_off or settings.sam_provider == "off"
+
+
+async def _collect_waiting(client, jpeg, settings: Settings, deadline: float, trace: dict, n: int):
+    """SAM off: wait for all n reads until the deadline. Replace a failed read once per slot.
+
+    Returns (reads, mode, timed_out) like collect_reads. A total still needs every read back
+    and agreeing (decide() is unchanged); this only stops the scan from giving up on a read
+    that is merely slow, and from paying for a third read that could never speak.
+    """
+    started = time.perf_counter()
+    log = trace.setdefault("reads", [])
+    tasks = {
+        asyncio.create_task(_read(client, jpeg, settings, muse.PRIMARY, i, with_refs=i == 1)): i
+        for i in range(n)
+    }
+    waiting = set(tasks)
+    ok: dict[int, list[str]] = {}
+    replaced: list[int] = []
+    dead = False  # a slot failed twice: no total is possible, stop waiting
+    trace["wait"] = {"until_s": settings.scan_deadline_s, "replaced": replaced}
+    try:
+        while waiting and not dead:
+            left = deadline - time.perf_counter()
+            if left <= 0:
+                break
+            done, waiting = await asyncio.wait(
+                waiting, timeout=left, return_when=asyncio.FIRST_COMPLETED
+            )
+            for t in sorted(done, key=lambda t: tasks[t]):
+                r = t.result()
+                slot = tasks[t]
+                if slot in replaced:
+                    r["replacement"] = True
+                log.append(r)
+                if r["ok"]:
+                    ok[slot] = r["labels"]
+                elif slot not in replaced and not dead:
+                    replaced.append(slot)
+                    again = asyncio.create_task(
+                        _read(client, jpeg, settings, muse.PRIMARY, slot, with_refs=slot == 1)
+                    )
+                    tasks[again] = slot
+                    waiting.add(again)
+                else:
+                    dead = True
+    finally:
+        trace["timing_ms"]["reads_stage"] = _ms(started)
+        if waiting:
+            await _cancel(waiting)
+            log.extend({"slot": tasks[t], "ok": False, "error": "cancelled"} for t in waiting)
+
+    if len(ok) == n:
+        return [ok[i] for i in range(n)], "two_read" if n > 1 else "single_read", False
+    if dead:
+        trace["wait"]["ended"] = "read_failed_twice"
+        # Whatever came back cannot speak a total alone; decide() turns it into a rescan.
+        return [ok[i] for i in sorted(ok)][:1], "single_read", False
+    trace["wait"]["ended"] = "deadline"
+    return [], "two_read_wait", True
+
+
 async def collect_reads(client, jpeg, settings: Settings, deadline: float, trace: dict):
     """Return (reads, mode, timed_out). reads holds the label lists the decision uses."""
     n = max(1, settings.muse_reads)
+    if n > 1 and _sam_disabled(settings):
+        return await _collect_waiting(client, jpeg, settings, deadline, trace, n)
     started = time.perf_counter()
     tasks = {
         asyncio.create_task(_read(client, jpeg, settings, muse.PRIMARY, i, with_refs=i == 1)): i
