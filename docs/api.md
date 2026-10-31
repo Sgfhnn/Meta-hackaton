@@ -199,7 +199,7 @@ The app is a conversation: the user taps anywhere (or holds) and speaks, and the
 | `text` | string | a typed turn instead of audio (tests, the web preview), at most 500 characters |
 | `lang` | string | `en` or `am`: the language the user chose. The answer is always in it, unless the action is `set_lang` |
 | `session_id` | string | optional, picked by the app (a random id per launch). The last 6 turns of a session stay in memory for 30 minutes so the user can answer a question ("and the price was 320") |
-| `state` | JSON string | optional: `{"last_total": 350, "last_notes": [200, 100, 50], "pending_paid": 500, "pending_price": null, "camera_open": false}`. What the app last told the user, so "how much did I have?" and a two-part change question work. `camera_open: true` while live guidance runs: then "take it" / "now" means `capture` and "stop" / "cancel" closes the camera |
+| `state` | JSON string | optional: `{"last_total": 350, "last_notes": [200, 100, 50], "pending_paid": 500, "pending_price": null, "camera_open": false}`. What the app last told the user, so "how much did I have?" and a two-part change question work. `camera_open: true` while live guidance runs: then "take it" / "now" means `capture` and "stop" / "cancel" closes the camera. `audio_log`: optional list of the app's last clip outcomes (e.g. `"clip started 240 ms"`, `"clip error: ..."`); the last 8 (160 chars each) go into the trace only, to diagnose phones that play no clips |
 
 **Response 200**
 ```json

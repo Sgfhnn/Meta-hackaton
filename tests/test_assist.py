@@ -171,6 +171,17 @@ def test_trace_never_holds_the_words(ac):
     assert "secret" not in trace and '"outcome": "scan"' in trace
 
 
+def test_trace_keeps_the_apps_clip_log(ac):
+    log = [f"clip started {i} ms" for i in range(10)] + ["x" * 500, 5]
+    state = json.dumps({"camera_open": False, "audio_log": log})
+    tid = say_audio(ac, state=state).json()["trace_id"]
+    trace = json.loads((ac.trace_dir / f"{tid}.json").read_text())
+    kept = trace["inputs"]["client_audio"]
+    assert kept[0] == "clip started 4 ms" and kept[-1] == "x" * 160 and len(kept) == 7
+    tid = say_audio(ac, state="not json").json()["trace_id"]
+    assert "client_audio" not in json.loads((ac.trace_dir / f"{tid}.json").read_text())["inputs"]
+
+
 # ---- birr.voice.assist itself ----
 
 

@@ -6,6 +6,7 @@ Run: uv run uvicorn birr.api:app --reload
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -293,6 +294,19 @@ MAX_TEXT = 500
 MAX_FRAME_BYTES = 1024 * 1024
 
 
+def _client_audio_log(raw: str | None) -> list[str]:
+    """The app's last few clip outcomes ('clip started 240 ms', 'clip error ...'), kept in the
+    trace only, so a real phone that plays no clips can be diagnosed without its logcat."""
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return []
+    log = data.get("audio_log") if isinstance(data, dict) else None
+    if not isinstance(log, list):
+        return []
+    return [str(line)[:160] for line in log[-8:] if isinstance(line, str)]
+
+
 @app.post("/assist")
 async def assist_turn(
     audio: Annotated[UploadFile | None, File()] = None,
@@ -312,6 +326,8 @@ async def assist_turn(
     sid = (session_id or "")[:64] or None
     st = assist.State.parse(state)
     trace: dict = {"endpoint": "/assist", "inputs": {"lang": lang, "session": bool(sid)}}
+    if playback := _client_audio_log(state):
+        trace["inputs"]["client_audio"] = playback
     started = time.perf_counter()
     timing: dict = {}
 
