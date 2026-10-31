@@ -1,17 +1,14 @@
-"""Gemini calls for voice: speech to intent, translation, and text to speech. Mocked in tests.
+"""Gemini call for voice: the spoken question -> intent and amounts (POST /intent). Mocked in tests.
 
-Gemini never reads notes or computes totals (docs/api.md). It hears the user's question, translates
-the answer the backend wrote, and speaks it. Intent and translation use generateContent with a
-JSON schema. Speech uses the Interactions API, which answers with a complete WAV file.
+Gemini never reads notes, computes totals or speaks (docs/api.md). It only hears the question,
+using generateContent with a JSON schema. Answers are spoken by Meta MMS (birr/voice/mms.py).
 """
 
 from __future__ import annotations
 
 import base64
-import io
 import json
 import os
-import wave
 
 import httpx
 
@@ -76,12 +73,6 @@ INTENT_SCHEMA = {
     "required": ["transcript", "lang", "intent", "paid", "price"],
 }
 
-TRANSLATE_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {"texts": {"type": "ARRAY", "items": {"type": "STRING"}}},
-    "required": ["texts"],
-}
-
 
 class GeminiError(RuntimeError):
     pass
@@ -141,68 +132,3 @@ async def understand(
         "paid": amount(data.get("paid")),
         "price": amount(data.get("price")),
     }
-
-
-async def translate(
-    client: httpx.AsyncClient, texts: list[str], lang: str, settings: Settings
-) -> list[str]:
-    """English texts -> the same texts in `lang`, in order. Numbers are checked by the caller."""
-    prompt = (
-        f"Translate each message into {LANG_NAMES[lang]}. A cash assistant app speaks them "
-        "aloud to a blind person, so use short, plain, everyday words. Keep every number that "
-        "is written in digits exactly as written, in the same digits. Birr is the Ethiopian "
-        "currency. Return one translation per message, in the same order.\n\nMessages:\n"
-        + json.dumps(texts, ensure_ascii=False)
-    )
-    data = await _generate_json(
-        client, [{"text": prompt}], TRANSLATE_SCHEMA, settings, settings.translate_timeout_s
-    )
-    out = data.get("texts")
-    if not isinstance(out, list) or len(out) != len(texts):
-        raise GeminiError("translation count does not match")
-    if not all(isinstance(t, str) and t.strip() for t in out):
-        raise GeminiError("empty translation")
-    return [t.strip() for t in out]
-
-
-def _wav_from_pcm(pcm: bytes, rate: int = 24000) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(pcm)
-    return buf.getvalue()
-
-
-async def speak(client: httpx.AsyncClient, text: str, settings: Settings) -> bytes:
-    """Text -> WAV bytes (24 kHz mono 16-bit). Gemini detects the language from the text."""
-    url = f"{settings.gemini_base_url}/interactions"
-    content = {"type": "text", "text": text}
-    if settings.gemini_voice_style:
-        content["annotations"] = [{"type": "speech_metadata", "style": settings.gemini_voice_style}]
-    body = {
-        "model": settings.gemini_tts_model,
-        "input": [{"type": "user_input", "content": [content]}],
-        "response_format": {"type": "audio"},
-        "generation_config": {"speech_config": [{"voice": settings.gemini_voice}]},
-    }
-    try:
-        resp = await client.post(
-            url, json=body, headers=_headers(settings), timeout=settings.gemini_timeout_s
-        )
-        resp.raise_for_status()
-        clips = [
-            part
-            for step in resp.json().get("steps", [])
-            if step.get("type") == "model_output"
-            for part in step.get("content", [])
-            if part.get("type") == "audio"
-        ]
-        audio = base64.b64decode(clips[-1]["data"]) if clips else b""
-    except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        raise GeminiError(f"speech failed: {type(exc).__name__}") from exc
-    if not audio:
-        raise GeminiError("speech answer had no audio")
-    # The default answer is a full WAV file. Wrap raw 16-bit PCM in case a model sends that.
-    return audio if audio[:4] == b"RIFF" else _wav_from_pcm(audio)

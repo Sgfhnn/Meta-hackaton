@@ -39,7 +39,7 @@ The judge-visible proof is a side-by-side run on the same messy pile: Muse alone
 | Denomination reader | `birr/read/` | Muse Spark Open on Baseten (`meta-models/muse-spark-open-1026`, OpenAI-compatible). Takes one crop and returns `{denomination, confidence}`. |
 | Agent loop | `birr/agent/` | Intent → plan → tools → confidence → answer. Every step goes to a JSON trace. |
 | Arithmetic | `birr/agent/money.py` | Totals and change are computed in code only. Unit-tested. |
-| Voice I/O | `birr/voice/` | Gemini: speech to intent (`POST /intent`), translation into Amharic and Oromo (numbers checked in code), and Amharic speech clips (`GET /speak`). English answers are written in code. |
+| Voice I/O | `birr/voice/` | Gemini hears the question (`POST /intent`). Answers are written in English in code, put into Amharic and Oromo by fixed templates (numbers written by code), and spoken by Meta MMS-TTS on the CPU (`GET /speak`). |
 | Eval harness | `evals/` | A/B test: Muse alone vs SAM 3.1 + Muse. Per-note accuracy, exact totals, gate summary. |
 
 ## 4. Gate (Wed Oct 28, 12:00 EAT)

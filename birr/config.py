@@ -109,8 +109,9 @@ class Settings:
     # sheet is made from pre-event photos. Missing sheets make read B fail, so no total is spoken.
     refs_dir: str = field(default_factory=lambda: os.getenv("REFS_DIR", "").strip())
     trace_dir: str = field(default_factory=lambda: os.getenv("TRACE_DIR", "traces"))
-    # Voice (docs/api.md section 1): Gemini hears the question, translates the answer the backend
-    # wrote into Amharic or Oromo, and speaks it. Without GEMINI_API_KEY answers stay in English.
+    # Voice (docs/api.md section 1). Gemini only hears the spoken question (POST /intent); without
+    # GEMINI_API_KEY that endpoint answers 501. Answers in Amharic and Oromo come from fixed
+    # templates (birr/voice/templates.py) and are spoken by Meta MMS-TTS on the CPU.
     gemini_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     gemini_base_url: str = field(
         default_factory=lambda: os.getenv(
@@ -122,31 +123,27 @@ class Settings:
     gemini_thinking_level: str = field(
         default_factory=lambda: os.getenv("GEMINI_THINKING_LEVEL", "").strip()
     )
-    gemini_tts_model: str = field(
-        default_factory=lambda: os.getenv("GEMINI_TTS_MODEL", "gemini-3.8-flash-tts")
-    )
-    gemini_voice: str = field(default_factory=lambda: os.getenv("GEMINI_VOICE", "Kore"))
-    gemini_voice_style: str = field(
-        default_factory=lambda: os.getenv("GEMINI_VOICE_STYLE", "calm, clear and a little slow")
-    )
-    # Languages Gemini speaks aloud. Its TTS list has Amharic but not Oromo, so Oromo stays text
-    # (the app speaks English) until a native speaker checks it: GEMINI_TTS_LANGS=am,om.
-    gemini_tts_langs: frozenset[str] = field(
-        default_factory=lambda: frozenset(
-            x.strip() for x in os.getenv("GEMINI_TTS_LANGS", "am").split(",") if x.strip()
-        )
-    )
     gemini_timeout_s: float = field(
         default_factory=lambda: float(os.getenv("GEMINI_TIMEOUT_S", "15"))
-    )
-    # Translation runs inside the scan job. Past this, the answer stays in English.
-    translate_timeout_s: float = field(
-        default_factory=lambda: float(os.getenv("TRANSLATE_TIMEOUT_S", "8"))
     )
     max_audio_bytes: int = field(
         default_factory=lambda: int(os.getenv("MAX_AUDIO_BYTES", str(3 * 1024 * 1024)))
     )
-    # Translations and speech clips. Holds backend phrases and totals only, never user audio.
+    # "mms" (Meta MMS-TTS, needs `uv sync --extra tts`) or "off" (text only; the app's phone voice).
+    tts_engine: str = field(default_factory=lambda: os.getenv("TTS_ENGINE", "mms").strip().lower())
+    # Languages spoken as clips. Both are drafts until a native speaker has listened.
+    tts_langs: frozenset[str] = field(
+        default_factory=lambda: frozenset(
+            x.strip() for x in os.getenv("TTS_LANGS", "am,om").split(",") if x.strip()
+        )
+    )
+    mms_model_am: str = field(
+        default_factory=lambda: os.getenv("MMS_TTS_AM", "facebook/mms-tts-amh")
+    )
+    mms_model_om: str = field(
+        default_factory=lambda: os.getenv("MMS_TTS_OM", "facebook/mms-tts-orm")
+    )
+    # Speech clips (WAV). Holds backend sentences only, never user audio.
     voice_cache_dir: str = field(
         default_factory=lambda: os.getenv("VOICE_CACHE_DIR", "voice_cache")
     )

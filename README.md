@@ -12,7 +12,7 @@ Built during the Meta Global AI Developer Hackathon (Oct 26 – Nov 4, 2026). Th
 2. **Photo.** A tap photographs the notes. The app caps the photo at 2048 px and strips EXIF.
 3. **Two reads.** Two Muse Spark Open reads run in parallel: one plain, and one with reference sheets of every note. A total is spoken only when both list the same notes and none is unclear. Otherwise the user is guided to rescan.
 4. **Count check (optional).** SAM counts note regions as a cross-check (`SAM_PROVIDER`, below).
-5. **Answer.** The backend computes the total and the change in code. It writes the answer in English and translates it, and a translation that changes any number is thrown away. The app speaks the answer.
+5. **Answer.** The backend computes the total and the change in code, and writes the answer in English and, from fixed templates, in Amharic or Oromo, with the numbers written by code. Meta MMS speaks it.
 
 ## Backend
 
@@ -43,16 +43,15 @@ Each `/scan` and `/intent` call writes one JSON trace to `TRACE_DIR`. Traces hol
 
 `SAM_OFF=1` also means `off`. The live box currently runs `SAM_OFF=1` with `MUSE_ONLY_TOTALS=1`, and SAM stays switchable while the team tests it. `SAM_ADVISORY=1` logs SAM's count without letting it block a total.
 
-### Voice (Gemini)
+### Voice
 
-Set `GEMINI_API_KEY`. The key stays on the backend, and the app never sees it.
-- `gemini-3.8-flash` hears the question (with a JSON schema) and translates answers into Amharic and Oromo. Each phrase is translated once and cached in `VOICE_CACHE_DIR`. To fix a wording, edit `translations.<lang>.json` there.
-- `gemini-3.8-flash-tts` speaks Amharic. Gemini's TTS list does not include Oromo, so Oromo answers stay text (the app speaks them with a phone voice, or in English) until a native speaker checks the Oromo voice. Then set `GEMINI_TTS_LANGS=am,om`.
-- Fixed phrases are translated and voiced at startup, so prompts and errors need no wait.
+- **Hearing the question:** Gemini (`gemini-3.8-flash`, with a JSON schema) turns the recorded question into an intent and amounts. Set `GEMINI_API_KEY`; it stays on the backend, and the app never sees it. Without it, `/intent` answers 501 and the app counts by tap.
+- **Answers in Amharic and Oromo:** fixed templates in `birr/voice/templates.py`, filled in by code (`birr/voice/localize.py`). No model translates, so nothing can change an amount. The templates are drafts until a native speaker checks them.
+- **Speaking them:** Meta MMS-TTS (`facebook/mms-tts-amh`, `facebook/mms-tts-orm`) on the CPU. Numbers become words in code (`birr/voice/numbers.py`), because the model reads no digits. Install it with `uv sync --extra tts` (CPU PyTorch, transformers and uroman, about 1 GB), and start the server with `uv run --extra tts uvicorn birr.api:app --port 8000` so the next sync keeps it. Loading takes about 8 s per language. At startup the fixed phrases' clips are made in the background (about a minute of CPU). After that, a short sentence takes about 1 s, and a total plus a change check about 3 s. Clips are cached in `VOICE_CACHE_DIR`. `TTS_ENGINE=off` gives text only, and the app then speaks with the phone's voice.
 
 ### Tests
 
-`uv run pytest` runs everything with Muse, SAM, Modal and Gemini mocked, so it needs no keys or network. App checks: see `app/README.md`.
+`uv run pytest` runs everything with Muse, SAM, Modal, Gemini and MMS mocked, so it needs no keys, network or model downloads. `RUN_MMS=1` with the `tts` extra also runs the real MMS voices. App checks: see `app/README.md`.
 
 ## App
 
@@ -79,10 +78,10 @@ One wrong total fails the zero-wrong rule, so Muse Spark Open (`muse-spark-open-
 
 ## Disclosures
 
-- **Models and services.** Muse Spark Open (Meta) on Baseten reads the notes. Muse Spark 1.3 through the Cline API is an optional fallback reader and is off by default. Gemini (Google) hears questions, translates answers and speaks them. It never reads notes or computes totals. SAM 3 runs on Roboflow, or SAM 3.1 or SAM 3 runs on Modal, both optional. Each provider processes what we send under its own terms.
+- **Models and services.** Muse Spark Open (Meta) on Baseten reads the notes. Muse Spark 1.3 through the Cline API is an optional fallback reader and is off by default. Gemini (Google) only hears the spoken question; it never reads notes, computes totals or speaks. Meta MMS-TTS speaks Amharic and Oromo on our own server (non-commercial license, CC-BY-NC 4.0). SAM 3 runs on Roboflow, or SAM 3.1 or SAM 3 runs on Modal, both optional. Each provider processes what we send under its own terms.
 - **Data.** The backend stores no photos and no recordings, only traces with labels and timings. The app strips EXIF, including GPS. Voice questions go to Gemini to be understood, and neither the audio nor the transcript is kept. The voice cache holds only text the backend wrote and its audio.
 - **Pre-event material.** Photos taken before the event were used only for development and testing. They, and the reference sheets made from them, are not in this repo.
-- **Translations.** Gemini makes them, and code checks that no number changed. A native speaker has not reviewed the wording yet.
+- **Amharic and Oromo.** The sentences are fixed templates, drafted with AI help. Code fills in every number. A native speaker has not reviewed the wording or the MMS voices yet. This project uses the universal romanizer software 'uroman' written by Ulf Hermjakob, USC Information Sciences Institute (2015-2020).
 - **Limits.** Birr notes of 5, 10, 50, 100 and 200 only. It does not detect counterfeits.
 - **Secrets.** Keys live in environment variables only (`.env.example` lists them).
 - **AI assistance.** Parts of this code were written with AI coding assistants.

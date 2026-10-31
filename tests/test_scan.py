@@ -126,12 +126,13 @@ def test_change_correct(client, fake):
     assert body["speech"]["en"].endswith("Your change is correct.")
 
 
-def test_amharic_returns_english_with_todo(client, fake):
+def test_amharic_answer_from_templates(client, fake):
     fake["labels"] = ["100"]
     fake["regions"] = THREE[:1]
     body = post_scan(client, lang="am").json()
-    assert body["speech"]["am"] == body["speech"]["en"]
-    assert "Gemini" in body["speech_todo"]
+    assert body["speech"]["am"] == "በአጠቃላይ 100 ብር አለዎት፦ አንድ ባለ 100 ብር።"
+    assert "speech_todo" not in body
+    assert "speech_audio" not in body  # TTS_ENGINE=off in tests: text only
 
 
 def test_error_missing_field_has_speech(client, fake):

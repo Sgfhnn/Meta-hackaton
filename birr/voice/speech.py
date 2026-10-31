@@ -1,8 +1,8 @@
 """Spoken text, built in code, in English.
 
-Amharic and Oromo come from birr/voice/service.py: Gemini translates these English phrases (numbers
-checked) and speaks them. Until a phrase has a checked translation, lang "am" or "om" gets the
-English text, flagged in `speech_todo`.
+Amharic and Oromo come from fixed templates (birr/voice/templates.py), filled in by
+birr/voice/localize.py, which reads these exact sentences back. If you change a sentence here,
+change its pattern there too (tests/test_localize.py checks every builder).
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def change_prompt(paid: int, price: int) -> str:
     return f"{head} {change} Spread it out, hold the phone over it and tap the screen."
 
 
-# Every fixed backend phrase, translated ahead of time when Gemini is configured.
+# Every fixed backend phrase. Their clips are made at startup.
 FIXED = [
     RESCAN, NO_NOTES, GIVE_UP, TRY_AGAIN, TOO_SLOW, SLOW_RESCAN, STILL_COUNTING, BAD_REQUEST,
     NEED_PRICE, VOICE_TODO, COUNT_PROMPT, INTENT_UNKNOWN, PRICE_OVER_PAID, BAD_AUDIO, NOT_HEARD,
@@ -113,7 +113,7 @@ APP_PHRASES = {
 
 
 def speech(en: str, lang: str) -> tuple[dict, str | None]:
-    """Return (speech dict, todo note). Non-English keys carry English until Gemini translates."""
+    """Return (speech dict, todo note) without templates (only used outside the app's lifespan)."""
     if lang in ("am", "om"):
-        return {"en": en, lang: en}, f"{lang} translation pending: Gemini translates and speaks"
+        return {"en": en, lang: en}, f"{lang}: no template yet"
     return {"en": en}, None

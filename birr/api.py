@@ -26,19 +26,21 @@ from birr.image import BadImage, prepare_jpeg
 from birr.jobs import JobStore
 from birr.read import muse
 from birr.scan import ScanRequest
-from birr.voice import gemini
+from birr.voice import gemini, mms
 from birr.voice import speech as say
-from birr.voice.service import LANGS, Voice
+from birr.voice.service import LANGS, TRANSLATED, Voice
 
 POLL_AFTER_MS = 1500
 _CLIP_ID = re.compile(r"[0-9a-f]{32}")
 log = logging.getLogger(__name__)
 
 
-async def _warm(client: httpx.AsyncClient, voice: Voice) -> None:
-    """Translate and voice the fixed phrases at startup, so errors and prompts need no wait."""
-    if voice.enabled:
-        await voice.warm(client, say.FIXED + list(say.APP_PHRASES.values()))
+async def _warm(voice: Voice) -> None:
+    """Load the MMS voices and make the fixed phrases' clips, so prompts and errors need no wait."""
+    try:
+        await voice.warm(say.FIXED + list(say.APP_PHRASES.values()))
+    except Exception:  # noqa: BLE001 - a failed warm-up only costs speed: clips are made on demand
+        log.exception("voice warm-up failed")
 
 
 @asynccontextmanager
@@ -47,7 +49,7 @@ async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=settings.scan_deadline_s)
     app.state.jobs = JobStore()
     app.state.voice = Voice(settings)
-    warm = asyncio.create_task(_warm(app.state.http, app.state.voice))
+    warm = asyncio.create_task(_warm(app.state.voice))
     yield
     warm.cancel()
     await asyncio.gather(warm, return_exceptions=True)
@@ -92,7 +94,7 @@ async def _in_language(work, lang: str) -> tuple[int, dict]:
     never costs the answer: it then stays in English."""
     status, body = await work
     try:
-        return status, await app.state.voice.localize_body(app.state.http, body, lang)
+        return status, await app.state.voice.localize_body(body, lang)
     except Exception:  # noqa: BLE001
         log.exception("could not localize a scan answer")
         return status, body
@@ -204,7 +206,7 @@ async def intent(
         write_trace(settings.trace_dir, trace_id, trace)
         return _error(status, error, text, hint, trace_id)
 
-    if not voice.enabled:
+    if not settings.gemini_key:
         return fail(501, "not_implemented", say.VOICE_TODO, "GEMINI_API_KEY is not set")
     raw = await audio.read(settings.max_audio_bytes + 1)
     mime = gemini.audio_mime(audio.filename, audio.content_type)
@@ -231,7 +233,7 @@ async def intent(
     else:
         text, step = say.INTENT_UNKNOWN, "ask"
     try:
-        speech = await voice.localize(app.state.http, text, spoken_lang)
+        speech = await voice.localize(text, spoken_lang)
     except Exception:  # noqa: BLE001 - the intent still stands; speak it in English
         log.exception("could not localize an intent answer")
         speech = {"speech": {"en": text}}
@@ -258,8 +260,8 @@ async def speak(clip_id: str):
     if not _CLIP_ID.fullmatch(clip_id):
         return _error(404, "not_found", say.TRY_AGAIN)
     try:
-        wav = await app.state.voice.audio(app.state.http, clip_id)
-    except gemini.GeminiError:
+        wav = await app.state.voice.audio(clip_id)
+    except mms.MmsError:
         return _error(502, "upstream_error", say.TRY_AGAIN)
     if wav is None:
         return _error(404, "not_found", say.TRY_AGAIN)
@@ -272,7 +274,6 @@ async def phrases(lang: str = "en"):
     """The app's own prompts in `lang`, with audio links where Gemini speaks that language."""
     lang = lang if lang in LANGS else "en"
     voice: Voice = app.state.voice
-    await voice.translate(app.state.http, list(say.APP_PHRASES.values()), lang)
     out = {}
     for key, en in say.APP_PHRASES.items():
         fields = voice.speech(en, lang)
@@ -284,7 +285,9 @@ async def phrases(lang: str = "en"):
 async def health():
     # refs: read B's reference sheets are loaded; without them no scan can speak a total.
     # sam: which SAM provider counts the notes (roboflow, modal or off).
-    # voice: Gemini is configured, and the languages it speaks aloud.
+    # voice.intent: POST /intent works (Gemini key set). voice.translates: answers come in Amharic
+    # and Oromo (fixed templates, always on). voice.tts / speaks: Meta MMS clips, and in which
+    # languages. voice.gemini repeats voice.intent for older app builds.
     settings = get_settings()
     voice: Voice = app.state.voice
     return {
@@ -292,7 +295,10 @@ async def health():
         "refs": muse.load_refs(settings.refs_dir) is not None,
         "sam": settings.sam_provider,
         "voice": {
-            "gemini": voice.enabled,
-            "speaks": sorted(settings.gemini_tts_langs) if voice.enabled else [],
+            "intent": bool(settings.gemini_key),
+            "gemini": bool(settings.gemini_key),
+            "translates": True,
+            "tts": voice.tts,
+            "speaks": [lang for lang in TRANSLATED if voice.speaks(lang)],
         },
     }

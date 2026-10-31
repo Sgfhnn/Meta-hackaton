@@ -4,7 +4,7 @@ This is the contract between the Expo app and the backend. Both sides build agai
 
 Scope: birr notes of 5, 10, 50, 100 and 200 (the denominations in the gate labels). Any other note comes back as `unclear`.
 
-**Who does what:** Muse Spark Open reads every note. Gemini only hears the user's question, translates the answers the backend wrote, and speaks them (Amharic, Oromo, English); it never reads notes or computes totals. SAM finds and locates notes. `SAM_PROVIDER` picks Roboflow's hosted SAM 3 (`roboflow`, the default), our SAM 3.1 endpoint on Modal (`modal`, see `modal_sam/README.md`), or no SAM (`off`, which `SAM_OFF=1` also sets). They are not identical, so hint positions proven on one must be re-checked on the other. `GET /health` reports the provider in use.
+**Who does what:** Muse Spark Open reads every note. Gemini only hears the user's question (`POST /intent`); it never reads notes, computes totals or speaks. Answers in Amharic and Oromo come from fixed templates and are spoken by Meta MMS-TTS. SAM finds and locates notes. `SAM_PROVIDER` picks Roboflow's hosted SAM 3 (`roboflow`, the default), our SAM 3.1 endpoint on Modal (`modal`, see `modal_sam/README.md`), or no SAM (`off`, which `SAM_OFF=1` also sets). They are not identical, so hint positions proven on one must be re-checked on the other. `GET /health` reports the provider in use.
 
 ## Core rules
 
@@ -45,14 +45,14 @@ The user holds the screen (or taps Ask) and speaks. Gemini hears the question an
 
 ### 1.1 Speech in the user's language
 
-Every answer, error and poll carries `speech`: a dict with `en` and, for `lang` `am` or `om`, that language. The backend writes the English text in code. Gemini translates it once per phrase, and the translation is cached.
+Every answer, error and poll carries `speech`: a dict with `en` and, for `lang` `am` or `om`, that language. The backend writes the English text in code. The Amharic and Oromo text comes from **fixed templates** (`birr/voice/templates.py`), filled in by code (`birr/voice/localize.py`). **No model translates anything**, so nothing can change an amount.
 
-- **Numbers are checked.** Every number in the English must appear, in digits, in the translation (extra small numbers, like a note count, are allowed). A translation that drops or changes a number is thrown away. The user then hears English rather than a wrong amount.
-- **`speech_todo`** is set when `speech[lang]` holds English because there is no checked translation (no `GEMINI_API_KEY`, or the translation failed or was thrown away). The app then speaks the English text with an English voice.
-- **`speech_audio`** links a clip of `speech[lang]` that already exists, so the app can play it at once. It is present only for languages Gemini speaks (`GEMINI_TTS_LANGS`, default `am`; Gemini's TTS list has Amharic but not Oromo, so Oromo stays off until a native speaker checks it). If the clip can't be made, the link is left out and the app uses its own TTS.
-- **`GET /speak/{clip_id}`** returns the clip (`audio/wav`, 24 kHz mono, cacheable). It serves only text the backend itself wrote, so it can't be used to speak arbitrary text. An unknown id answers `404`, and a Gemini failure answers `502`.
+- **Numbers come from code.** On screen, amounts are digits. For the voice, they are words written by `birr/voice/numbers.py` (350 → ሦስት መቶ ሃምሳ), because the voice model reads no digits. A sentence the templates don't recognise, or whose numbers don't add up, stays English.
+- **`speech_todo`** is set when `speech[lang]` holds English because no template covers that sentence. The app then speaks the English text with an English voice.
+- **`speech_audio`** links a clip of `speech[lang]` that already exists, so the app can play it at once. The clips come from **Meta MMS-TTS** (`facebook/mms-tts-amh`, `facebook/mms-tts-orm`) on the backend's CPU (`TTS_ENGINE=mms`, the `tts` extra; `TTS_LANGS`, default `am,om`). It's left out when MMS is off, or when a clip can't be made; the app then uses the phone's voice.
+- **`GET /speak/{clip_id}`** returns the clip (`audio/wav`, 16 kHz mono, cacheable). It serves only text the backend itself wrote, so it can't be used to speak arbitrary text. An unknown id answers `404`, and an MMS failure answers `502`.
 - **`GET /phrases?lang=am`** returns the app's own prompts (keys like `counting`, `noNetwork`) as `{"lang": "am", "phrases": {"counting": {"text": "...", "audio": "/speak/…"}}}`, with `audio` `null` where there is no clip. The app downloads the clips so they play offline. The English texts live in `birr/voice/speech.py` (`APP_PHRASES`) and must match `app/src/voice.ts` (`PROMPTS`).
-- Fixed phrases are translated and voiced at startup. Wording can be fixed by editing `translations.<lang>.json` in `VOICE_CACHE_DIR`; edited lines are kept.
+- The fixed phrases' clips are made at startup. The templates are drafts: a native speaker checks them, and the wording is fixed by editing `birr/voice/templates.py`.
 
 ## 2. `POST /scan`: count the notes
 
@@ -126,7 +126,7 @@ An unknown or expired `job_id` (finished jobs are kept `JOB_TTL_S`, default 10 m
 | `notes[].denomination` | One of 5, 10, 50, 100, 200, or `null` when not read. |
 | `notes[].confidence`, `notes[].box` | May be `null`: the per-photo Muse read gives neither. SAM fills `box` for the note a hint targets. |
 | `hint` | For `guide` only: `{"note_index": 1, "position": "near center", "relation": "under_top", "covered_by": 0, "action": "slide_out"}`. `position` is from the user's point of view (near/far, left/right). `relation` is optional: `under_top` or `next_to`. `covered_by` is the index of the note on top, if any. `action` is one of `slide_out`, `lay_flat`, `move_closer` or `more_light`. A hint targets **one note at a time**, the most covered first; the app rescans after each move. |
-| `speech` | The text the app speaks (Gemini TTS). The backend writes it, and the app speaks it word for word. |
+| `speech` | The text the app speaks, word for word: English from code, Amharic and Oromo from templates (§1.1). With `speech_audio`, a ready MMS clip of it. |
 | `timing_ms` | Latency per stage, for monitoring: `muse` (the whole read stage, retry included), `sam` and `total`. The trace has the full breakdown: each read's ms, the two-read stage, the retry and SAM. |
 
 **When the two reads disagree** (different notes or a different number of notes): the outcome is `rescan`, unless both reads agree on the count and SAM's count differs, which is `guide` as below.
@@ -149,7 +149,7 @@ Any non-200 response (and any `error` job) carries spoken text, so the user alwa
 | 404 | `not_found`: unknown or expired `job_id` on `GET /scan/{job_id}` |
 | 404 | `not_found` on `GET /speak/{clip_id}`: a clip id this backend never handed out |
 | 501 | `not_implemented`: `POST /intent` without `GEMINI_API_KEY` |
-| 502 | `upstream_error`: every Muse read failed (as the `error` of a job, or directly with `wait=true`), or Gemini failed on `/intent` or `/speak`. SAM failing alone is not an error: the outcome is `rescan` |
+| 502 | `upstream_error`: every Muse read failed (as the `error` of a job, or directly with `wait=true`), or Gemini failed on `/intent`, or MMS failed on `/speak`. SAM failing alone is not an error: the outcome is `rescan` |
 
 A scan that runs past the 60 s limit is not an error: it ends as `outcome: "rescan"` (§2.1).
 
@@ -170,6 +170,7 @@ Each `/scan` and `/intent` call writes one JSON trace, keyed by `trace_id`. It r
 ## 6. `GET /health`
 
 ```json
-{"ok": true, "refs": true, "sam": "off", "voice": {"gemini": true, "speaks": ["am"]}}
+{"ok": true, "refs": true, "sam": "off",
+ "voice": {"intent": true, "gemini": true, "translates": true, "tts": "mms", "speaks": ["am", "om"]}}
 ```
-`refs`: read B's reference sheets are loaded (without them no scan speaks a total). `sam`: the SAM provider (`roboflow`, `modal` or `off`). `voice.gemini`: Gemini is configured, so `/intent` works and answers come translated. `voice.speaks`: the languages answered with clips.
+`refs`: read B's reference sheets are loaded (without them no scan speaks a total). `sam`: the SAM provider (`roboflow`, `modal` or `off`). `voice.intent`: `POST /intent` works (Gemini key set); `voice.gemini` repeats it for older app builds. `voice.translates`: answers come in Amharic and Oromo (templates, always on). `voice.tts`: `mms` or `off`. `voice.speaks`: the languages answered with clips.

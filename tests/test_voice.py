@@ -1,13 +1,11 @@
-"""Gemini voice: request shapes (mocked HTTP), the number check, caches, and the voice endpoints.
-
-No network and no keys: Gemini calls go to httpx.MockTransport or to fakes.
+"""Voice: Gemini intent requests (mocked HTTP), Amharic/Oromo answers from templates, MMS clips
+(a fake engine), and the voice endpoints. No network, no keys, no model downloads.
 """
 
 import asyncio
 import base64
 import io
 import json
-import time
 import wave
 
 import httpx
@@ -17,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from birr import api
 from birr.config import Settings
-from birr.voice import gemini
+from birr.voice import gemini, localize, mms
 from birr.voice import speech as say
 from birr.voice.service import Voice, numbers_kept
 
@@ -47,29 +45,40 @@ def wav_bytes(seconds=0.1) -> bytes:
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.setframerate(24000)
-        w.writeframes(b"\x00\x00" * int(24000 * seconds))
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * int(16000 * seconds))
     return buf.getvalue()
 
 
-def tts_answer(audio: bytes) -> dict:
-    data = base64.b64encode(audio).decode()
-    return {"steps": [{"type": "model_output", "content": [{"type": "audio", "data": data}]}]}
+class FakeMms:
+    """Stands in for birr.voice.mms.Mms: records what it was asked to say."""
+
+    def __init__(self, fail=False):
+        self.said, self.loaded, self.fail = [], [], fail
+
+    def load(self, lang):
+        self.loaded.append(lang)
+
+    def synthesize(self, text, lang):
+        if self.fail:
+            raise mms.MmsError("down")
+        self.said.append((lang, text))
+        return wav_bytes()
 
 
 @pytest.fixture
-def gemini_env(monkeypatch, tmp_path):
+def voice_env(monkeypatch, tmp_path):
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
     monkeypatch.setenv("VOICE_CACHE_DIR", str(tmp_path / "voice"))
-    monkeypatch.delenv("GEMINI_TTS_LANGS", raising=False)
+    monkeypatch.delenv("TTS_LANGS", raising=False)
     monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
     return tmp_path
 
 
-# --- Gemini client ------------------------------------------------------------------------
+# --- Gemini: hearing the question ------------------------------------------------------------
 
 
-def test_understand_request_shape(gemini_env):
+def test_understand_request_shape(voice_env):
     seen = {}
 
     def handler(request):
@@ -85,18 +94,17 @@ def test_understand_request_shape(gemini_env):
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
     )
     assert seen["key"] == "test-gemini-key"
-    body = seen["body"]
-    parts = body["contents"][0]["parts"]
+    parts = seen["body"]["contents"][0]["parts"]
     assert parts[0]["text"] == gemini.INTENT_PROMPT
     assert parts[1]["inlineData"]["mimeType"] == "audio/m4a"
     assert base64.b64decode(parts[1]["inlineData"]["data"]) == SHORT_M4A
-    config = body["generationConfig"]
+    config = seen["body"]["generationConfig"]
     assert config["responseMimeType"] == "application/json"
     assert config["responseSchema"] == gemini.INTENT_SCHEMA
     assert "thinkingConfig" not in config
 
 
-def test_thinking_level_is_optional(gemini_env, monkeypatch):
+def test_thinking_level_is_optional(voice_env, monkeypatch):
     monkeypatch.setenv("GEMINI_THINKING_LEVEL", "low")
     seen = {}
 
@@ -122,7 +130,7 @@ def test_thinking_level_is_optional(gemini_env, monkeypatch):
          {"lang": "en", "intent": "change", "paid": None, "price": None}),
     ],
 )  # fmt: skip
-def test_understand_cleans_answers(gemini_env, answer, expected):
+def test_understand_cleans_answers(voice_env, answer, expected):
     answer = {"transcript": "", **answer}
     handler = lambda request: httpx.Response(200, json=generated(answer))  # noqa: E731
     heard = with_mock(handler, lambda c: gemini.understand(c, SHORT_M4A, "audio/m4a", Settings()))
@@ -138,66 +146,12 @@ def test_understand_cleans_answers(gemini_env, answer, expected):
         httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "[1]"}]}}]}),
     ],
 )
-def test_understand_failures_raise(gemini_env, response):
+def test_understand_failures_raise(voice_env, response):
     with pytest.raises(gemini.GeminiError):
         with_mock(
             lambda request: response,
             lambda c: gemini.understand(c, SHORT_M4A, "audio/m4a", Settings()),
         )
-
-
-def test_translate_request_and_count_check(gemini_env):
-    seen = {}
-
-    def handler(request):
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json=generated({"texts": ["ሀ 350", "ለ"]}))
-
-    texts = ["You have 350 birr.", "Counting."]
-    out = with_mock(handler, lambda c: gemini.translate(c, texts, "am", Settings()))
-    assert out == ["ሀ 350", "ለ"]
-    prompt = seen["body"]["contents"][0]["parts"][0]["text"]
-    assert "Amharic" in prompt and json.dumps(texts) in prompt
-    assert seen["body"]["generationConfig"]["responseSchema"] == gemini.TRANSLATE_SCHEMA
-
-    one = lambda request: httpx.Response(200, json=generated({"texts": ["only one"]}))  # noqa: E731
-    with pytest.raises(gemini.GeminiError):
-        with_mock(one, lambda c: gemini.translate(c, texts, "am", Settings()))
-
-
-def test_speak_request_shape_and_wav(gemini_env):
-    seen = {}
-    clip = wav_bytes()
-
-    def handler(request):
-        seen["url"] = str(request.url)
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json=tts_answer(clip))
-
-    assert with_mock(handler, lambda c: gemini.speak(c, "ሰላም", Settings())) == clip
-    assert seen["url"] == "https://generativelanguage.googleapis.com/v1beta/interactions"
-    body = seen["body"]
-    assert body["model"] == "gemini-3.8-flash-tts"
-    assert body["response_format"] == {"type": "audio"}
-    assert body["generation_config"] == {"speech_config": [{"voice": "Kore"}]}
-    content = body["input"][0]["content"][0]
-    assert content["text"] == "ሰላም"
-    assert content["annotations"][0]["type"] == "speech_metadata"
-
-
-def test_speak_wraps_raw_pcm(gemini_env):
-    pcm = b"\x01\x00" * 2400
-    handler = lambda request: httpx.Response(200, json=tts_answer(pcm))  # noqa: E731
-    out = with_mock(handler, lambda c: gemini.speak(c, "hi", Settings()))
-    with wave.open(io.BytesIO(out)) as w:
-        assert (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (1, 2, 24000)
-        assert w.readframes(w.getnframes()) == pcm
-
-
-@pytest.mark.parametrize("response", [httpx.Response(429), httpx.Response(200, json={"steps": []})])
-def test_speak_failures_raise(gemini_env, response):
-    with pytest.raises(gemini.GeminiError):
-        with_mock(lambda request: response, lambda c: gemini.speak(c, "hi", Settings()))
 
 
 @pytest.mark.parametrize(
@@ -214,113 +168,96 @@ def test_audio_mime(filename, content_type, expected):
     assert gemini.audio_mime(filename, content_type) == expected
 
 
-# --- Number check and caches ---------------------------------------------------------------
+# --- Answers in Amharic and Oromo, and their clips ---------------------------------------------
 
 
 @pytest.mark.parametrize(
     "en, text, ok",
     [
-        ("You have 350 birr: one 200, one 100 and one 50.", "350 ብር አለዎት፤ 200፣ 100 እና 50።", True),
-        ("You have 350 birr: one 200, one 100 and one 50.", "305 ብር አለዎት፤ 200፣ 100 እና 50።", False),
-        ("You have 350 birr: one 200, one 100 and one 50.", "350 ብር አለዎት።", False),
+        ("You have 350 birr: one 200, one 100 and one 50.", "350 ብር፤ 200፣ 100 እና 50።", True),
+        ("You have 350 birr: one 200, one 100 and one 50.", "305 ብር፤ 200፣ 100 እና 50።", False),
         ("You have 300 birr: three 100s.", "300 ብር: 3 x 100", True),
-        ("You have 300 birr: three 100s.", "300 ብር: 3 x 100 እና 50", False),
-        ("Counting.", "በመቁጠር ላይ።", True),
+        ("Counting.", "እየቆጠርኩ ነው።", True),
     ],
 )
 def test_numbers_kept(en, text, ok):
     assert numbers_kept(en, text) is ok
 
 
-def fake_translate(prefix="AM"):
-    calls = []
-
-    async def translate(client, texts, lang, settings):
-        calls.append((lang, list(texts)))
-        return [f"{prefix}-{lang}: {t}" for t in texts]
-
-    translate.calls = calls
-    return translate
+def test_speech_needs_no_key(monkeypatch, tmp_path):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("TTS_ENGINE", "off")
+    fields = Voice(Settings()).speech(say.COUNT_PROMPT, "am")
+    assert fields == {"speech": {"en": say.COUNT_PROMPT, "am": localize.render(say.COUNT_PROMPT,
+                                                                             "am")[0]}}  # fmt: skip
 
 
-def test_translations_are_cached_on_disk(gemini_env, monkeypatch):
-    fake = fake_translate()
-    monkeypatch.setattr(gemini, "translate", fake)
-    voice = Voice(Settings())
-    run(voice.translate(None, ["Counting.", "You have 50 birr."], "am"))
-    run(voice.translate(None, ["Counting."], "am"))  # cached: no second call
-    assert len(fake.calls) == 1
-    again = Voice(Settings())  # a restart reads the saved file
-    assert again.speech("Counting.", "am")["speech"]["am"] == "AM-am: Counting."
+def test_clip_is_made_before_the_answer(voice_env):
+    engine = FakeMms()
+    voice = Voice(Settings(), engine=engine)
+    en = say.total_text(350, [200, 100, 50])
+    fields = run(voice.localize(en, "am"))
+    shown, spoken = localize.render(en, "am")
+    assert fields["speech"] == {"en": en, "am": shown}
+    assert fields["speech_audio"].startswith("/speak/")
+    assert engine.said == [("am", spoken)]  # words, not digits: MMS reads no digits
+    assert "350" in shown and "350" not in spoken
 
 
-def test_translation_that_changes_a_number_is_dropped(gemini_env, monkeypatch):
-    async def bad(client, texts, lang, settings):
-        return [t.replace("350", "530") for t in texts]
+def test_no_clip_for_a_language_not_spoken(voice_env, monkeypatch):
+    monkeypatch.setenv("TTS_LANGS", "am")
+    fields = run(Voice(Settings(), engine=FakeMms()).localize(say.RESCAN, "om"))
+    assert fields["speech"]["om"] == localize.render(say.RESCAN, "om")[0]
+    assert "speech_audio" not in fields
 
-    monkeypatch.setattr(gemini, "translate", bad)
-    voice = Voice(Settings())
-    fields = run(voice.localize(None, "You have 350 birr: one 200, one 100 and one 50.", "am"))
-    assert fields["speech"]["am"] == fields["speech"]["en"]  # English stands in
+
+def test_failed_clip_leaves_text_only(voice_env):
+    fields = run(Voice(Settings(), engine=FakeMms(fail=True)).localize(say.RESCAN, "am"))
+    assert "speech_audio" not in fields and fields["speech"]["am"]
+
+
+def test_unknown_sentence_stays_english(voice_env):
+    fields = Voice(Settings(), engine=FakeMms()).speech("Something new.", "am")
+    assert fields["speech"] == {"en": "Something new.", "am": "Something new."}
     assert "speech_todo" in fields and "speech_audio" not in fields
 
 
-def test_speech_audio_only_for_spoken_languages(gemini_env, monkeypatch):
-    spoken = []
-
-    async def speak(client, text, settings):
-        spoken.append(text)
-        return wav_bytes()
-
-    monkeypatch.setattr(gemini, "translate", fake_translate())
-    monkeypatch.setattr(gemini, "speak", speak)
-    voice = Voice(Settings())
-    am = run(voice.localize(None, "Counting.", "am"))
-    om = run(voice.localize(None, "Counting.", "om"))
-    assert am["speech_audio"].startswith("/speak/")
-    assert spoken == ["AM-am: Counting."]  # made before localize returned; Oromo is not spoken
-    assert om["speech"]["om"] == "AM-om: Counting." and "speech_audio" not in om
-    assert Voice(Settings()).speech("Counting.", "en") == {"speech": {"en": "Counting."}}
-
-
-def test_without_a_key_nothing_is_translated(monkeypatch, tmp_path):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.setenv("VOICE_CACHE_DIR", str(tmp_path))
-
-    async def boom(*args):
-        raise AssertionError("Gemini must not be called without a key")
-
-    monkeypatch.setattr(gemini, "translate", boom)
-    fields = run(Voice(Settings()).localize(None, "Counting.", "am"))
-    assert fields["speech"] == {"en": "Counting.", "am": "Counting."}
-    assert "not configured" in fields["speech_todo"]
+def test_warm_loads_voices_and_makes_fixed_clips(voice_env):
+    engine = FakeMms()
+    voice = Voice(Settings(), engine=engine)
+    run(voice.warm([say.RESCAN, say.STILL_COUNTING]))
+    assert engine.loaded == ["am", "om"]
+    assert len(engine.said) == 4
+    run(voice.warm([say.RESCAN]))  # cached on disk: nothing new to say
+    assert len(engine.said) == 4
 
 
 # --- Endpoints -----------------------------------------------------------------------------
 
 
 @pytest.fixture
-def voice_client(gemini_env, monkeypatch):
-    """A client with Gemini 'configured': every Gemini call goes to a fake."""
-    monkeypatch.setenv("TRACE_DIR", str(gemini_env))
+def voice_client(voice_env, monkeypatch):
+    """A client with Gemini 'configured' and a fake MMS voice."""
+    monkeypatch.setenv("TRACE_DIR", str(voice_env))
     monkeypatch.delenv("MUSE_ONLY_TOTALS", raising=False)
-    state = {"heard": None, "spoken": []}
+    engine = FakeMms()
+    real_init = Voice.__init__
+
+    def init(self, settings, engine_arg=None):
+        real_init(self, settings, engine=engine)
+
+    monkeypatch.setattr(Voice, "__init__", init)
+    state = {"heard": None, "engine": engine}
 
     async def understand(client, audio, mime, settings):
         if isinstance(state["heard"], Exception):
             raise state["heard"]
         return state["heard"]
 
-    async def speak(client, text, settings):
-        state["spoken"].append(text)
-        return wav_bytes()
-
     monkeypatch.setattr(gemini, "understand", understand)
-    monkeypatch.setattr(gemini, "translate", fake_translate())
-    monkeypatch.setattr(gemini, "speak", speak)
     with TestClient(api.app) as c:
         c.state = state
-        c.trace_dir = gemini_env
+        c.trace_dir = voice_env
         yield c
 
 
@@ -359,7 +296,7 @@ def test_intent_next_step_and_speech(voice_client, answer, step, text):
     assert body["next"] == step
     assert body["lang"] == "am"
     assert (body["paid"], body["price"]) == (answer["paid"], answer["price"])
-    assert body["speech"] == {"en": text, "am": f"AM-am: {text}"}
+    assert body["speech"] == {"en": text, "am": localize.render(text, "am")[0]}
     assert body["speech_audio"].startswith("/speak/")
     trace = json.loads((voice_client.trace_dir / f"{body['trace_id']}.json").read_text())
     assert trace["outcome"] == answer["intent"] and trace["next"] == step
@@ -370,7 +307,7 @@ def test_intent_falls_back_to_the_app_language(voice_client):
     voice_client.state["heard"] = heard("count", lang=None)
     body = post_intent(voice_client, lang="om").json()
     assert body["lang"] == "om"
-    assert body["speech"]["om"] == f"AM-om: {say.COUNT_PROMPT}"
+    assert body["speech"]["om"] == localize.render(say.COUNT_PROMPT, "om")[0]
 
 
 @pytest.mark.parametrize(
@@ -408,8 +345,8 @@ def test_speak_serves_and_caches_clips(voice_client):
     assert first.headers["content-type"] == "audio/wav"
     assert first.content[:4] == b"RIFF"
     assert voice_client.get(link).content == first.content
-    # Made once, before /intent answered; both downloads came from the cache.
-    assert voice_client.state["spoken"].count(f"AM-am: {say.COUNT_PROMPT}") == 1
+    spoken = localize.render(say.COUNT_PROMPT, "am")[1]
+    assert voice_client.state["engine"].said.count(("am", spoken)) == 1  # made once, then cached
 
 
 @pytest.mark.parametrize("path", ["/speak/" + "0" * 32, "/speak/not-a-clip", "/speak/..%2Fx"])
@@ -417,30 +354,16 @@ def test_speak_unknown_clip_is_404(voice_client, path):
     assert voice_client.get(path).status_code == 404
 
 
-def test_no_audio_link_when_gemini_cannot_speak(voice_client, monkeypatch):
-    async def down(client, text, settings):
-        raise gemini.GeminiError("down")
-
-    monkeypatch.setattr(gemini, "speak", down)
-    voice_client.state["heard"] = heard("change", paid=500, price=320)
-    body = post_intent(voice_client).json()
-    assert body["speech"]["am"] == f"AM-am: {say.change_prompt(500, 320)}"
-    assert "speech_audio" not in body  # the app speaks the text instead
-
-
-def test_speak_gemini_failure_is_502(voice_client, monkeypatch):
-    async def down(client, text, settings):
-        raise gemini.GeminiError("down")
-
-    monkeypatch.setattr(gemini, "speak", down)
-    clip = api.app.state.voice.clip_id("am", "AM-am: not made yet")
+def test_speak_mms_failure_is_502(voice_client):
+    voice_client.state["engine"].fail = True
+    clip = api.app.state.voice.clip_id("am", "ገና ያልተሰራ")
     assert voice_client.get(f"/speak/{clip}").status_code == 502
 
 
 def test_phrases(voice_client):
     am = voice_client.get("/phrases", params={"lang": "am"}).json()
     assert set(am["phrases"]) == set(say.APP_PHRASES)
-    assert am["phrases"]["counting"]["text"] == "AM-am: Counting."
+    assert am["phrases"]["counting"]["text"] == "እየቆጠርኩ ነው።"
     assert am["phrases"]["counting"]["audio"].startswith("/speak/")
     en = voice_client.get("/phrases", params={"lang": "en"}).json()
     assert en["phrases"]["counting"] == {"text": "Counting.", "audio": None}
@@ -449,41 +372,34 @@ def test_phrases(voice_client):
 def test_scan_answer_in_amharic(voice_client, fake):
     fake["labels"] = ["100", "50"]
     fake["regions"] = []
-    r = post_scan(voice_client, lang="am")
-    body = r.json()
-    assert body["speech"]["am"].startswith("AM-am: ")
-    assert body["speech"]["am"].endswith(body["speech"]["en"])
+    body = post_scan(voice_client, lang="am").json()
+    assert body["speech"]["am"] == localize.render(body["speech"]["en"], "am")[0]
     assert body["speech_audio"].startswith("/speak/")
     assert "speech_todo" not in body
 
 
-def test_errors_use_cached_translations(voice_client):
-    # The startup warm-up translates the fixed phrases, so an error needs no Gemini call.
-    for _ in range(100):
-        if say.BAD_REQUEST in api.app.state.voice.translations["am"]:
-            break
-        time.sleep(0.01)
-    r = voice_client.get("/scan/unknown-job")
-    assert r.status_code == 404
-    assert r.json()["speech"] == {"en": say.TRY_AGAIN}  # no lang on a poll for an unknown job
+def test_errors_use_templates(voice_client):
     files = {"image": ("x.jpg", b"not an image", "image/jpeg")}
-    r = voice_client.post(
-        "/scan", data={"intent": "count", "lang": "am", "wait": "true"}, files=files
-    )
+    data = {"intent": "count", "lang": "am", "wait": "true"}
+    r = voice_client.post("/scan", data=data, files=files)
     assert r.status_code == 400
-    assert r.json()["speech"]["am"] == f"AM-am: {say.BAD_REQUEST}"
+    assert r.json()["speech"]["am"] == localize.render(say.BAD_REQUEST, "am")[0]
 
 
 def test_health_reports_voice(voice_client):
-    assert voice_client.get("/health").json()["voice"] == {"gemini": True, "speaks": ["am"]}
+    assert voice_client.get("/health").json()["voice"] == {
+        "intent": True, "gemini": True, "translates": True, "tts": "mms", "speaks": ["am", "om"],
+    }  # fmt: skip
 
 
-def test_health_without_gemini(client):
-    assert client.get("/health").json()["voice"] == {"gemini": False, "speaks": []}
+def test_health_without_gemini_or_mms(client):
+    assert client.get("/health").json()["voice"] == {
+        "intent": False, "gemini": False, "translates": True, "tts": "off", "speaks": [],
+    }  # fmt: skip
 
 
-def test_a_translation_crash_keeps_the_scan_answer(voice_client, fake, monkeypatch):
-    async def broken(client, body, lang):
+def test_a_localize_crash_keeps_the_scan_answer(voice_client, fake, monkeypatch):
+    async def broken(body, lang):
         raise RuntimeError("bug")
 
     monkeypatch.setattr(api.app.state.voice, "localize_body", broken)

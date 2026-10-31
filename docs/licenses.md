@@ -11,7 +11,8 @@ Every open-source dependency, model or service we build on is listed here, as th
 | SAM 3 and SAM 3.1 (`facebookresearch/sam3` code, `facebook/sam3` and `facebook/sam3.1` weights) | SAM License (Meta, last updated Nov 19, 2025). It covers both code and weights | `modal_sam/` (optional), pinned to commit `f1647e8`. Weights download at runtime from gated Hugging Face repos; none are in this repo |
 | Roboflow serverless SAM 3 (optional) | Roboflow's terms of service | hosted SAM 3 (`SAM_PROVIDER=roboflow`) |
 | Modal (optional) | Modal's terms of service | GPU hosting for `modal_sam/` |
-| Gemini API: `gemini-3.8-flash`, `gemini-3.8-flash-tts` | Google's Gemini API terms | hearing questions, translating answers, speaking Amharic |
+| Gemini API: `gemini-3.8-flash` | Google's Gemini API terms | hearing the spoken question (`POST /intent`) |
+| Meta MMS-TTS: `facebook/mms-tts-amh`, `facebook/mms-tts-orm` | CC-BY-NC 4.0 (non-commercial) | speaking Amharic and Oromo on our server. Weights download at runtime; none are in this repo |
 
 ## Backend (Python)
 
@@ -19,6 +20,8 @@ Every open-source dependency, model or service we build on is listed here, as th
 |---|---|---|---|
 | FastAPI | ≥ 0.162 | MIT | the API |
 | httpx | ≥ 0.28 | BSD-3-Clause | calls to Baseten, Roboflow, Modal and Gemini |
+| PyTorch (CPU), transformers, NumPy (`tts` extra) | ≥ 2.6, ≥ 4.50, ≥ 2.0 | BSD-3-Clause, Apache-2.0, BSD-3-Clause | running MMS-TTS |
+| uroman (`tts` extra) | ≥ 1.3.1 | MIT-style, with attribution (below) | romanizing Amharic for MMS |
 | Pillow | ≥ 13 | MIT-CMU (HPND) | photo resizing |
 | python-multipart | ≥ 0.0.32 | Apache-2.0 | form uploads |
 | Uvicorn | ≥ 0.30 | BSD-3-Clause | the server |
@@ -54,3 +57,7 @@ Every open-source dependency, model or service we build on is listed here, as th
 | Component | License | Used for |
 |---|---|---|
 | Noto Sans Ethiopic Black (Google) | SIL Open Font License 1.1 | the ብር glyphs in the logo, converted to outlines in `app/assets/logo.svg`. The font itself is not distributed |
+
+## Attribution
+
+This project uses the universal romanizer software 'uroman' written by Ulf Hermjakob, USC Information Sciences Institute (2015-2020). Ulf Hermjakob, Jonathan May, and Kevin Knight. 2018. Out-of-the-box universal romanization tool uroman. In Proceedings of the 56th Annual Meeting of the Association for Computational Linguistics, Demo Track.
