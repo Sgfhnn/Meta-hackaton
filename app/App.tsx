@@ -1,5 +1,6 @@
 // Birr: one screen for blind and low-vision users. Tap anywhere, the phone photographs the notes,
 // the backend counts them (docs/api.md), and the answer is spoken. Totals come only from the backend.
+// Hold the screen (or use Ask) to ask by voice: "How much do I have?" or "I paid 500 for 320".
 
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
@@ -10,68 +11,111 @@ import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { choosePictureSize } from './src/pictureSize';
 import { preparePhoto, scan, usingMock, type ScanOutcome } from './src/scan';
-import type { Lang } from './src/types';
-import { loadVoices, pickSpeech, PROMPTS, say, sayQueued } from './src/voice';
+import type { Lang, PhraseKey, ScanRequest, Spoken } from './src/types';
+import { useVoiceQuestion, type Recording } from './src/useVoiceQuestion';
+import { loadVoices, promptText, say, sayPrompt, setPhrases, speakAnswer, stopSpeaking } from './src/voice';
+import { askIntent, backendTranslates, fetchPhrases, type IntentOutcome } from './src/voiceApi';
 
 const MAX_ATTEMPTS = 3; // docs/api.md: app default
 // The backend ends a slow scan itself at 60 s (as a rescan answer). This only covers a lost connection.
 const SCAN_TIMEOUT_MS = 90_000;
+const INTENT_TIMEOUT_MS = 30_000;
 const TICK_MS = 2_000; // docs/api.md: a soft tick every 2 s, so silence never means "broken"
 const STILL_COUNTING_AT_TICK = 5; // docs/api.md: "Still counting." once, after about 10 s
+// A change check set up by voice applies to the next scans for this long.
+const CHANGE_TTL_MS = 5 * 60_000;
+const LANG_ORDER: Lang[] = ['en', 'am', 'om'];
 const LANG_NAMES: Record<Lang, string> = { en: 'English', am: 'Amharic', om: 'Afaan Oromoo' };
+const LANG_LABELS: Record<Lang, string> = { en: 'English', am: 'አማርኛ', om: 'Afaan Oromoo' };
+const GREEN = '#0B3B2D'; // the logo's colours
+const YELLOW = '#FFD23F';
+
+type ChangeCheck = { paid: number; price: number; at: number };
 
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
   const camera = useRef<CameraView>(null);
   const attempt = useRef(1);
   const welcomed = useRef(false);
+  const changeFor = useRef<ChangeCheck | null>(null);
   const [pictureSize, setPictureSize] = useState<string | undefined>();
   const [ready, setReady] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('Tap anywhere to count your money.');
+  const [busy, setBusy] = useState<false | 'scan' | 'ask'>(false);
+  const [message, setMessage] = useState('Tap anywhere to count your money. Hold to ask a question.');
+  const [changeNote, setChangeNote] = useState<string | null>(null);
   const [lang, setLang] = useState<Lang>('en');
   const [langs, setLangs] = useState<Lang[]>(['en']);
+  const question = useVoiceQuestion(onRecorded);
 
   useEffect(() => {
-    loadVoices().then((available) => setLangs([...available]));
+    // Amharic and Oromo are offered when the backend translates, or when the phone has a voice.
+    // Separate calls: on some browsers the voice list never arrives.
+    const add = (more: Lang[]) => setLangs((now) => LANG_ORDER.filter((l) => now.includes(l) || more.includes(l)));
+    loadVoices().then((voices) => add([...voices]));
+    backendTranslates().then((translates) => translates && add(['am', 'om']));
   }, []);
 
   useEffect(() => {
-    if (permission && !permission.granted) say(PROMPTS.cameraNeeded);
+    if (lang !== 'en') fetchPhrases(lang).then((p) => setPhrases(lang, p));
+  }, [lang]);
+
+  useEffect(() => {
+    if (permission && !permission.granted) sayPrompt('cameraNeeded', lang);
   }, [permission?.granted]);
 
   // Speak it, and show it for anyone helping the user.
-  function announce(text: string, locale?: string) {
-    setMessage(text);
-    say(text, locale);
+  function announcePrompt(key: PhraseKey) {
+    setMessage(promptText(key, lang));
+    sayPrompt(key, lang);
+  }
+
+  function announceAnswer(answer: Spoken, answerLang: Lang, otherwise: PhraseKey) {
+    const shown = speakAnswer(answer.speech, answerLang, answer.speech_audio, !answer.speech_todo);
+    if (shown) setMessage(shown);
+    else announcePrompt(otherwise);
+  }
+
+  function setChange(check: ChangeCheck | null) {
+    changeFor.current = check;
+    setChangeNote(check ? `Checking change: paid ${check.paid}, price ${check.price}` : null);
   }
 
   function handle(result: ScanOutcome) {
     if (result.kind === 'ok') {
-      const { text, locale } = pickSpeech(result.body.speech, lang);
       if (result.body.outcome === 'total') {
         attempt.current = 1;
+        setChange(null); // a change check ends with its answer
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
         // guide or rescan: the next tap is the next attempt. The backend's text already
         // says "stop" on the last one, so start over after that.
         attempt.current = attempt.current >= MAX_ATTEMPTS ? 1 : attempt.current + 1;
+        if (attempt.current === 1) setChange(null);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       }
-      announce(text, locale);
+      announceAnswer(result.body, lang, 'failed');
     } else if (result.kind === 'error') {
-      const { text, locale } = pickSpeech(result.body.speech, lang);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      announce(text || PROMPTS.failed, locale);
+      announceAnswer(result.body, lang, 'failed');
     } else {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      announce(result.kind === 'timeout' ? PROMPTS.failed : PROMPTS.noNetwork);
+      announcePrompt(result.kind === 'timeout' ? 'failed' : 'noNetwork');
     }
   }
 
+  function scanRequest(): ScanRequest {
+    const base = { lang, attempt: attempt.current, maxAttempts: MAX_ATTEMPTS };
+    const change = changeFor.current;
+    if (change && Date.now() - change.at < CHANGE_TTL_MS) {
+      return { ...base, intent: 'change', paid: change.paid, price: change.price };
+    }
+    if (change) setChange(null);
+    return { ...base, intent: 'count' };
+  }
+
   async function count() {
-    if (busy) {
-      sayQueued(PROMPTS.busy);
+    if (busy || question.listening) {
+      if (busy) sayPrompt('busy', lang, true);
       return;
     }
     if (!ready || !camera.current) return;
@@ -85,40 +129,106 @@ export default function App() {
   // Count a photo already on the phone (testing, or a photo someone took for the user).
   async function pickPhoto() {
     if (busy) {
-      sayQueued(PROMPTS.busy);
+      sayPrompt('busy', lang, true);
       return;
     }
-    const picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    let picked: ImagePicker.ImagePickerResult;
+    try {
+      picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    } catch {
+      announcePrompt('failed'); // e.g. no photo library permission: say so, never stay silent
+      return;
+    }
     if (picked.canceled || !picked.assets?.length) return;
     const a = picked.assets[0];
     await run(async () => ({ uri: a.uri, width: a.width, height: a.height }));
   }
 
   async function run(getPhoto: () => Promise<{ uri: string; width: number; height: number }>) {
-    setBusy(true);
+    setBusy('scan');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    announce(PROMPTS.counting);
+    announcePrompt('counting');
     let ticks = 0;
     const ticker = setInterval(() => {
       ticks += 1;
       Haptics.selectionAsync();
-      if (ticks === STILL_COUNTING_AT_TICK) sayQueued(PROMPTS.stillCounting);
+      if (ticks === STILL_COUNTING_AT_TICK) sayPrompt('stillCounting', lang, true);
     }, TICK_MS);
     try {
       const photo = await getPhoto();
       const jpeg = await preparePhoto(photo.uri, photo.width, photo.height);
-      const req = { lang, attempt: attempt.current, maxAttempts: MAX_ATTEMPTS };
-      const result = await scan(jpeg, req, SCAN_TIMEOUT_MS);
+      const result = await scan(jpeg, scanRequest(), SCAN_TIMEOUT_MS);
       clearInterval(ticker);
       handle(result);
     } catch {
       clearInterval(ticker);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      announce(PROMPTS.failed);
+      announcePrompt('failed');
     } finally {
       clearInterval(ticker);
       setBusy(false);
     }
+  }
+
+  // Voice questions: hold the screen and let go, or tap Ask twice. Nothing is spoken while
+  // recording (it would be recorded too); a strong vibration marks the start.
+  async function startListening() {
+    if (busy) {
+      sayPrompt('busy', lang, true);
+      return;
+    }
+    stopSpeaking();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setMessage(promptText('listening', lang));
+    await question.start();
+  }
+
+  function toggleListening() {
+    if (question.listening) void question.stop();
+    else void startListening();
+  }
+
+  function onRecorded(recording: Recording) {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (recording.kind === 'denied') announcePrompt('micNeeded');
+    else if (recording.kind === 'short') announcePrompt('tooShort');
+    else if (recording.kind === 'failed') announcePrompt('heardFailed');
+    else void ask(recording.uri);
+  }
+
+  async function ask(uri: string) {
+    setBusy('ask');
+    try {
+      handleIntent(await askIntent(uri, lang, INTENT_TIMEOUT_MS));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleIntent(result: IntentOutcome) {
+    if (result.kind !== 'ok') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      if (result.kind === 'error') announceAnswer(result.body, lang, 'heardFailed');
+      else announcePrompt(result.kind === 'timeout' ? 'heardFailed' : 'noNetwork');
+      return;
+    }
+    const answer = result.body;
+    // Answer in the language they spoke, when the app offers it.
+    const spoken = langs.includes(answer.lang) ? answer.lang : lang;
+    if (spoken !== lang) setLang(spoken);
+    if (answer.next === 'scan') {
+      // The user now spreads the notes and taps; that scan checks the change if they asked.
+      attempt.current = 1;
+      const { paid, price } = answer;
+      const isChange = answer.intent === 'change' && paid != null && price != null;
+      setChange(isChange ? { paid, price, at: Date.now() } : null);
+    }
+    Haptics.notificationAsync(
+      answer.next === 'ask'
+        ? Haptics.NotificationFeedbackType.Warning
+        : Haptics.NotificationFeedbackType.Success,
+    );
+    announceAnswer(answer, spoken, 'heardFailed');
   }
 
   // Ask the camera for at least 2048 px photos once it is up. Changing the size restarts the
@@ -141,7 +251,8 @@ export default function App() {
   function nextLanguage() {
     const next = langs[(langs.indexOf(lang) + 1) % langs.length];
     setLang(next);
-    announce(`Language: ${LANG_NAMES[next]}.`);
+    setMessage(LANG_LABELS[next]);
+    say(`Language: ${LANG_NAMES[next]}.`);
   }
 
   if (!permission) return <View style={styles.screen} />;
@@ -164,6 +275,7 @@ export default function App() {
     );
   }
 
+  const shown = busy === 'scan' ? 'Counting…' : busy === 'ask' ? '…' : message;
   return (
     <View style={styles.screen}>
       <CameraView
@@ -172,41 +284,67 @@ export default function App() {
         facing="back"
         pictureSize={pictureSize || undefined}
         onCameraReady={onCameraReady}
-        onMountError={() => announce('The camera could not start. Please close the app and open it again.')}
+        onMountError={() => {
+          const text = 'The camera could not start. Please close the app and open it again.';
+          setMessage(text);
+          say(text);
+        }}
       />
       <Pressable
         style={StyleSheet.absoluteFill}
         onPress={count}
+        onLongPress={startListening}
+        onPressOut={() => void question.stop()}
+        delayLongPress={450}
         accessibilityRole="button"
         accessibilityLabel="Count money"
-        accessibilityHint="Takes a photo of your notes and says the total"
-        accessibilityState={{ busy }}
+        accessibilityHint="Takes a photo of your notes and says the total. Touch and hold to ask a question."
+        accessibilityState={{ busy: busy !== false }}
+        accessibilityActions={[{ name: 'longpress', label: 'Ask a question' }]}
+        onAccessibilityAction={(event) => {
+          if (event.nativeEvent.actionName === 'longpress') toggleListening();
+        }}
       />
       <Pressable
-        style={styles.photoButton}
+        style={[styles.pill, styles.photoButton]}
         onPress={pickPhoto}
         accessibilityRole="button"
         accessibilityLabel="Count a saved photo"
         accessibilityHint="Opens your photos and counts the notes in the one you choose"
       >
-        <Text style={styles.langText}>Photo</Text>
+        <Text style={styles.pillText}>Photo</Text>
       </Pressable>
       <Pressable
-        style={styles.langButton}
+        style={[styles.pill, styles.langButton]}
         onPress={nextLanguage}
         accessibilityRole="button"
         accessibilityLabel={`Language: ${LANG_NAMES[lang]}`}
         accessibilityHint="Changes the spoken language"
       >
-        <Text style={styles.langText}>{LANG_NAMES[lang]}</Text>
+        <Text style={styles.pillText}>{LANG_LABELS[lang]}</Text>
       </Pressable>
       {usingMock && (
         <Text style={styles.mock} accessibilityLabel="Demo mode, no server">
           Demo mode (no server)
         </Text>
       )}
-      <View style={styles.messageBox} pointerEvents="none">
-        <Text style={styles.message}>{busy ? 'Counting…' : message}</Text>
+      <View style={styles.bottom} pointerEvents="box-none">
+        <Pressable
+          style={[styles.askButton, question.listening && styles.askButtonOn]}
+          onPress={toggleListening}
+          accessibilityRole="button"
+          accessibilityLabel="Ask a question"
+          accessibilityHint="Tap, ask how much money you have or say what you paid and the price, then tap again to send"
+          accessibilityState={{ busy: busy !== false }}
+        >
+          <Text style={[styles.askText, question.listening && styles.askTextOn]}>
+            {question.listening ? 'Listening… tap to send' : 'Ask'}
+          </Text>
+        </Pressable>
+        <View style={styles.messageBox} pointerEvents="none">
+          {changeNote && <Text style={styles.changeNote}>{changeNote}</Text>}
+          <Text style={styles.message}>{shown}</Text>
+        </View>
       </View>
       <StatusBar style="light" />
     </View>
@@ -214,55 +352,47 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#000' },
+  screen: { flex: 1, backgroundColor: GREEN },
   center: { alignItems: 'center', justifyContent: 'center', padding: 24 },
   big: { color: '#fff', fontSize: 32, fontWeight: '700', textAlign: 'center' },
-  langButton: {
+  pill: {
     position: 'absolute',
     top: 48,
-    right: 16,
     minHeight: 56,
-    minWidth: 120,
     paddingHorizontal: 16,
     justifyContent: 'center',
     borderRadius: 28,
     backgroundColor: 'rgba(0,0,0,0.75)',
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: YELLOW,
   },
-  photoButton: {
-    position: 'absolute',
-    top: 48,
-    left: 16,
-    minHeight: 56,
-    minWidth: 100,
-    paddingHorizontal: 16,
-    justifyContent: 'center',
-    borderRadius: 28,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  langText: { color: '#fff', fontSize: 20, fontWeight: '700', textAlign: 'center' },
+  photoButton: { left: 16, minWidth: 100 },
+  langButton: { right: 16, minWidth: 120 },
+  pillText: { color: '#fff', fontSize: 20, fontWeight: '700', textAlign: 'center' },
   mock: {
     position: 'absolute',
     top: 116,
     left: 16,
-    color: '#ffd400',
+    color: YELLOW,
     fontSize: 16,
     fontWeight: '700',
     backgroundColor: 'rgba(0,0,0,0.75)',
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
-  messageBox: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 48,
-    padding: 20,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0,0,0,0.8)',
+  bottom: { position: 'absolute', left: 16, right: 16, bottom: 40, gap: 12 },
+  askButton: {
+    minHeight: 64,
+    borderRadius: 32,
+    justifyContent: 'center',
+    backgroundColor: YELLOW,
+    borderWidth: 3,
+    borderColor: YELLOW,
   },
+  askButtonOn: { backgroundColor: GREEN },
+  askText: { color: GREEN, fontSize: 24, fontWeight: '800', textAlign: 'center' },
+  askTextOn: { color: YELLOW },
+  messageBox: { padding: 20, borderRadius: 16, backgroundColor: 'rgba(11,59,45,0.9)' },
+  changeNote: { color: YELLOW, fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 6 },
   message: { color: '#fff', fontSize: 28, fontWeight: '700', textAlign: 'center' },
 });
