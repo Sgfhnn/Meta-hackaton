@@ -34,12 +34,12 @@ The judge-visible proof is a side-by-side run on the same messy pile: Muse alone
 
 | Component | Path | Notes |
 |---|---|---|
-| Segmenter client | `birr/segment/` | SAM 3.1 (`facebook/sam3.1`, `facebookresearch/sam3` code). Dev and gate runs: Kaggle T4 batch. Fallback: Roboflow SAM 3 API. |
+| Segmenter client | `birr/segment/` | `SAM_PROVIDER`: Roboflow's hosted SAM 3 (default), our SAM 3.1 (or SAM 3) endpoint on Modal (`modal_sam/`), or off. The live box runs it off, with two agreeing Muse reads (`MUSE_ONLY_TOTALS`). |
 | Note filter | `birr/segment/filter.py` | Confidence threshold, min-area, IoU dedupe. Fragments become "unclear", never notes. |
 | Denomination reader | `birr/read/` | Muse Spark Open on Baseten (`meta-models/muse-spark-open-1026`, OpenAI-compatible). Takes one crop and returns `{denomination, confidence}`. |
 | Agent loop | `birr/agent/` | Intent → plan → tools → confidence → answer. Every step goes to a JSON trace. |
 | Arithmetic | `birr/agent/money.py` | Totals and change are computed in code only. Unit-tested. |
-| Voice I/O | `birr/voice/` | Muse Spark Open audio input for intent. Spoken output in Amharic and English. |
+| Voice I/O | `birr/voice/` | Gemini hears the question (`POST /intent`). Answers are written in English in code, put into Amharic and Oromo by fixed templates (numbers written by code), and spoken by Meta MMS-TTS on the CPU (`GET /speak`). |
 | Eval harness | `evals/` | A/B test: Muse alone vs SAM 3.1 + Muse. Per-note accuracy, exact totals, gate summary. |
 
 ## 4. Gate (Wed Oct 28, 12:00 EAT)

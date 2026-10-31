@@ -1,11 +1,19 @@
-"""The decision step: per-note reads + SAM regions -> total, guide or rescan.
+"""The decision step: Muse reads + SAM regions -> total, guide or rescan.
 
-Rules (docs/api.md): a total is spoken only when SAM's filtered count equals Muse's note count
-and every note is a valid denomination. When SAM is unavailable, a Muse-only total is allowed
-only if MUSE_ONLY_TOTALS is on and every label is valid; otherwise rescan, never guide.
+Rules (docs/api.md):
+- Two reads (normal path): a total needs both reads to list the same notes (same multiset of
+  valid denominations) AND SAM's filtered count to equal that note count.
+- One read (the retry after a slow or failed two-read stage): never gives a total. It ends as
+  guide when SAM's count differs, else rescan (single read + SAM spoke wrong totals in tests).
+- SAM_ADVISORY on (Muse's narrowed design, Oct 30): two agreeing reads give the total and SAM's
+  count is logged only (path agree_sam_advisory). Disagreement still ends as guide or rescan.
+- SAM unavailable: a Muse-only total is allowed only if MUSE_ONLY_TOTALS is on and two reads
+  agree; otherwise rescan, never guide.
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 from birr.agent import money
 from birr.segment.filter import Region
@@ -48,8 +56,19 @@ def pick_target(regions: list[Region], muse_count: int) -> tuple[int, int | None
     return min(range(len(regions)), key=lambda i: regions[i].area), None, "hidden"
 
 
+def reads_agree(reads: list[list[str]]) -> bool:
+    """True when every read lists the same multiset of valid denominations (order ignored)."""
+    if not reads:
+        return False
+    values = [[money.to_denomination(label) for label in r] for r in reads]
+    if any(not v or any(x is None for x in v) for v in values):
+        return False
+    first = Counter(values[0])
+    return all(Counter(v) == first for v in values[1:])
+
+
 def decide(
-    labels: list[str],
+    reads: list[list[str]],
     regions: list[Region] | None,
     *,
     intent: str,
@@ -58,8 +77,13 @@ def decide(
     attempt: int,
     max_attempts: int,
     muse_only_totals: bool,
+    sam_advisory: bool = False,
 ) -> dict:
-    """Return outcome, total, change, notes, hint and English speech text."""
+    """Return outcome, total, change, notes, hint and English speech text.
+
+    `reads` holds one or two Muse reads of the same photo. Notes are reported from the first.
+    """
+    labels = reads[0] if reads else []
     values = [money.to_denomination(label) for label in labels]
     notes = [
         {
@@ -71,21 +95,31 @@ def decide(
         }
         for label, v in zip(labels, values, strict=True)
     ]
-    all_valid = bool(values) and all(v is not None for v in values)
+    agreed = reads_agree(reads)  # with one read: every note valid
+    same_count = len({len(r) for r in reads}) == 1
     sam_ok = regions is not None
 
-    if sam_ok:
+    two_reads = len(reads) >= 2
+    path = None
+    if sam_advisory and two_reads and agreed and sam_ok:
+        # Muse's narrowed design: two agreeing reads speak; SAM's count is logged only.
+        outcome = "total"
+        path = "agree_sam_match" if sam_ok and len(regions) == len(labels) else "agree_sam_advisory"
+    elif sam_ok:
         counts_match = len(regions) == len(labels)
-        if counts_match and all_valid:
+        if counts_match and agreed and two_reads:
             outcome = "total"
-        elif not counts_match and regions:
+            path = "agree_sam_match"
+        elif same_count and not counts_match and regions:
             outcome = "guide"
         else:
             outcome = "rescan"
     else:
-        outcome = "total" if (muse_only_totals and all_valid) else "rescan"
+        outcome = "total" if (muse_only_totals and two_reads and agreed) else "rescan"
+        path = "agree_no_sam" if outcome == "total" else None
 
-    result = {"outcome": outcome, "total": None, "change": None, "notes": notes, "hint": None}
+    result = {"outcome": outcome, "total": None, "change": None, "notes": notes, "hint": None,
+              "path": path}  # fmt: skip
 
     if outcome == "total":
         amount = money.total(values)

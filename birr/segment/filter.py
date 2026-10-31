@@ -29,15 +29,17 @@ def iou(a: Region, b: Region) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def filter_regions(regions: list[Region]) -> tuple[list[Region], list[dict]]:
+def filter_regions(
+    regions: list[Region], min_score: float = MIN_SCORE, min_area: float = MIN_AREA
+) -> tuple[list[Region], list[dict]]:
     """Return kept regions and a decision log for the trace."""
     decisions: list[dict] = []
     kept: list[Region] = []
     for r in sorted(regions, key=lambda r: r.score, reverse=True):
         entry = {"box": [round(v, 4) for v in r.box], "score": round(r.score, 4)}
-        if r.score < MIN_SCORE:
+        if r.score < min_score:
             decisions.append({**entry, "kept": False, "reason": "low_score"})
-        elif r.area < MIN_AREA:
+        elif r.area < min_area:
             decisions.append({**entry, "kept": False, "reason": "small_area"})
         elif any(iou(r, k) >= NMS_IOU for k in kept):
             decisions.append({**entry, "kept": False, "reason": "duplicate"})

@@ -126,12 +126,13 @@ def test_change_correct(client, fake):
     assert body["speech"]["en"].endswith("Your change is correct.")
 
 
-def test_amharic_returns_english_with_todo(client, fake):
+def test_amharic_answer_from_templates(client, fake):
     fake["labels"] = ["100"]
     fake["regions"] = THREE[:1]
     body = post_scan(client, lang="am").json()
-    assert body["speech"]["am"] == body["speech"]["en"]
-    assert "Gemini" in body["speech_todo"]
+    assert body["speech"]["am"] == "በአጠቃላይ 100 ብር አለዎት፦ አንድ ባለ 100 ብር።"
+    assert "speech_todo" not in body
+    assert "speech_audio" not in body  # TTS_ENGINE=off in tests: text only
 
 
 def test_error_missing_field_has_speech(client, fake):
@@ -163,17 +164,20 @@ def test_error_muse_down_is_502(client, fake):
     assert r.json()["speech"]["en"]
 
 
-def test_timeout_is_504(client, fake, monkeypatch):
-    monkeypatch.setenv("SCAN_TIMEOUT_S", "0.05")
+def test_deadline_gives_rescan_not_error(client, fake, monkeypatch):
+    monkeypatch.setenv("SCAN_DEADLINE_S", "0.2")
+    monkeypatch.setenv("TWO_READ_TIMEOUT_S", "0.1")
 
     async def slow(*args, **kwargs):
         await asyncio.sleep(1)
 
     monkeypatch.setattr(muse, "read_notes", slow)
     r = post_scan(client)
-    assert r.status_code == 504
-    assert r.json()["error"] == "upstream_timeout"
-    assert r.json()["speech"]["en"]
+    assert r.status_code == 200
+    body = r.json()
+    assert body["outcome"] == "rescan"
+    assert body["total"] is None
+    assert "too long" in body["speech"]["en"]
 
 
 def test_trace_written_without_image(client, fake):
@@ -186,9 +190,17 @@ def test_trace_written_without_image(client, fake):
     assert "base64" not in path.read_text() and "jpeg" not in json.dumps(trace).lower()
 
 
-def test_intent_stub_is_501(client):
+def test_scan_rejects_an_image_over_the_limit(client, monkeypatch):
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "1000")  # the synthetic photo is larger
+    r = post_scan(client)
+    assert r.status_code == 400
+    assert r.json()["error"] == "bad_request"
+
+
+def test_intent_needs_audio(client):
+    # The spoken question is required; without Gemini an upload gets 501 (tests/test_voice.py).
     r = client.post("/intent", data={"lang": "en"})
-    assert r.status_code == 501
+    assert r.status_code == 400
     assert r.json()["speech"]["en"]
 
 

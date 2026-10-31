@@ -17,6 +17,7 @@ build/
 
 # Generated artifacts
 traces/
+voice_cache/
 evals/results/*.json
 !evals/results/.gitkeep
 

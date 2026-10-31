@@ -1,7 +1,8 @@
-"""Spoken text, built in code. English only for now.
+"""Spoken text, built in code, in English.
 
-Amharic and Oromo are produced by Gemini (translation + TTS) on the app side per the team plan,
-so for lang "am" or "om" the backend returns the same English text and flags it in `speech_todo`.
+Amharic and Oromo come from fixed templates (birr/voice/templates.py), filled in by
+birr/voice/localize.py, which reads these exact sentences back. If you change a sentence here,
+change its pattern there too (tests/test_localize.py checks every builder).
 """
 
 from __future__ import annotations
@@ -63,13 +64,56 @@ NO_NOTES = "I do not see any notes. Hold the phone above your notes and try agai
 GIVE_UP = "Sorry, I cannot count these notes. Please ask someone you trust for help."
 TRY_AGAIN = "Sorry, I couldn't check that. Please try again."
 TOO_SLOW = "Sorry, that took too long. Please try again."
+SLOW_RESCAN = "That took too long. Spread the notes out flat, hold the phone still and scan again."
+STILL_COUNTING = "Still counting."
 BAD_REQUEST = "Sorry, I couldn't use that photo. Please take it again."
 NEED_PRICE = "Tell me how much you paid and the price, then scan your change."
 VOICE_TODO = "Voice questions are not ready yet. Tap scan to count your notes."
+COUNT_PROMPT = "Spread your notes, hold the phone over them and tap the screen."
+INTENT_UNKNOWN = (
+    "Sorry, I did not understand. Ask how much money you have, "
+    "or say what you paid and the price to check your change."
+)
+PRICE_OVER_PAID = (
+    "The price you said is more than you paid. Tell me again how much you paid and the price."
+)
+BAD_AUDIO = "Sorry, I couldn't use that recording. Please ask again."
+NOT_HEARD = "Sorry, I couldn't hear that. Please try again."
+
+
+def change_prompt(paid: int, price: int) -> str:
+    head = f"You paid {paid} birr for {price} birr."
+    if paid == price:
+        return f"{head} You get no change."
+    change = f"Your change should be {paid - price} birr."
+    return f"{head} {change} Spread it out, hold the phone over it and tap the screen."
+
+
+# Every fixed backend phrase. Their clips are made at startup.
+FIXED = [
+    RESCAN, NO_NOTES, GIVE_UP, TRY_AGAIN, TOO_SLOW, SLOW_RESCAN, STILL_COUNTING, BAD_REQUEST,
+    NEED_PRICE, VOICE_TODO, COUNT_PROMPT, INTENT_UNKNOWN, PRICE_OVER_PAID, BAD_AUDIO, NOT_HEARD,
+]  # fmt: skip
+
+# The app's own prompts (app/src/voice.ts PROMPTS, same keys and English). GET /phrases returns
+# them translated, with audio, so the app can speak them even when the network is down later.
+APP_PHRASES = {
+    "counting": "Counting.",
+    "stillCounting": "Still counting.",
+    "failed": "Sorry, I could not count that. Please tap to try again.",
+    "noNetwork": "I cannot reach the server. Check the internet connection and tap to try again.",
+    "giveUp": "I cannot count these notes. Please spread them out flat and start again.",
+    "busy": "Still counting, please wait.",
+    "cameraNeeded": "This app needs the camera to count your money. Tap the screen to allow it.",
+    "listening": "Listening.",
+    "tooShort": "Hold the screen while you speak, then let go.",
+    "micNeeded": "To ask by voice, allow the microphone. You can still tap to count.",
+    "heardFailed": "Sorry, I couldn't hear that. Please try again.",
+}
 
 
 def speech(en: str, lang: str) -> tuple[dict, str | None]:
-    """Return (speech dict, todo note). Non-English keys carry English until Gemini translates."""
+    """Return (speech dict, todo note) without templates (only used outside the app's lifespan)."""
     if lang in ("am", "om"):
-        return {"en": en, lang: en}, f"{lang} translation pending: Gemini translates and speaks"
+        return {"en": en, lang: en}, f"{lang}: no template yet"
     return {"en": en}, None
