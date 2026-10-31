@@ -103,6 +103,13 @@ class Settings:
     )
     job_ttl_s: float = field(default_factory=lambda: float(os.getenv("JOB_TTL_S", "600")))
     sam_timeout_s: float = field(default_factory=lambda: float(os.getenv("SAM_TIMEOUT_S", "8")))
+    # REPEAT_CHECK=1: when the two agreeing reads list a value more than once, one more narrow Muse
+    # call counts only that value; the total is spoken only if every count matches (else rescan).
+    # Off until Hark's 37-photo x3 run shows it removes shared misreads (L04) without many rescans.
+    repeat_check: bool = field(default_factory=lambda: _flag("REPEAT_CHECK", False))
+    repeat_check_timeout_s: float = field(
+        default_factory=lambda: float(os.getenv("REPEAT_CHECK_TIMEOUT_S", "20"))
+    )
     # Pending team decision: when SAM is down, may a Muse-only read produce a total?
     muse_only_totals: bool = field(default_factory=lambda: _flag("MUSE_ONLY_TOTALS", False))
     # Folder with clean_sheet.jpg and real_sheet.jpg for read B. Kept outside the repo: the real

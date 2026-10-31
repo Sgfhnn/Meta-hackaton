@@ -157,3 +157,51 @@ async def read_notes(
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
         raise MuseError(f"Muse call failed ({reader}): {type(exc).__name__}") from exc
     return parse_labels(text)
+
+
+# The repeat check (birr/scan.py, REPEAT_CHECK=1): two reads of one photo can share a misread,
+# typically one extra note of a colour that appears twice. One narrow question per repeated value.
+NOTE_LOOKS = {
+    5: "grey-blue, the front with a green tint; a boxed 5; Ge'ez ፭; coffee picker; kudu, wild cat",
+    10: "bright green; Ge'ez ፲; camels and a coffee picker; four people joining hands, mesob",
+    50: "red/pink; Ge'ez ፶; tractor ploughing; factory with three chimneys",
+    100: "periwinkle blue, the back mint/teal with a peach-orange cave; Ge'ez ፻; castle and "
+    "obelisk; Sof Omar cave and Harar gate",
+    200: "purple/lilac; Ge'ez ፪፻; white dove; Walia ibex",
+}
+COUNT_PROMPT = """You are checking a count for a blind user. The photo shows Ethiopian birr \
+banknotes, often held in a hand, fanned, folded or overlapping.
+
+Count ONLY the {value}-birr notes ({looks}). Count whole physical notes: a note that a fold, a \
+finger or another note splits into two visible pieces is ONE note, and two layers are two notes \
+only when each has its own edge. Ignore every other value.
+
+Reply with ONLY JSON: {{"count": <whole number>}}, or {{"count": null}} if you cannot tell."""
+
+
+async def count_notes(
+    client: httpx.AsyncClient, jpeg: bytes, value: int, settings: Settings
+) -> int | None:
+    """How many `value`-birr notes Muse counts in the photo (None if it cannot tell)."""
+    text = COUNT_PROMPT.format(value=value, looks=NOTE_LOOKS[value])
+    content = [{"type": "text", "text": text}, {"type": "text", "text": PHOTO_LABEL}, _image(jpeg)]
+    body = {
+        "model": settings.muse_model,
+        "temperature": 0,
+        "messages": [{"role": "user", "content": content}],
+    }
+    if settings.muse_reasoning_effort:
+        body["reasoning_effort"] = settings.muse_reasoning_effort
+    headers = {"Authorization": f"Bearer {settings.muse_key}"}
+    try:
+        resp = await client.post(settings.muse_url, json=body, headers=headers)
+        resp.raise_for_status()
+        reply = resp.json()["choices"][0]["message"]["content"]
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+        raise MuseError(f"Muse count failed: {type(exc).__name__}") from exc
+    for obj in _json_objects(reply or ""):
+        if isinstance(obj, dict) and "count" in obj:
+            count = obj["count"]
+            ok = isinstance(count, int) and not isinstance(count, bool) and count >= 0
+            return count if ok else None
+    raise MuseError("no JSON count in Muse reply")

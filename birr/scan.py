@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import Counter
 from dataclasses import dataclass
 
 import httpx
 
+from birr.agent import money
 from birr.agent.decide import decide
 from birr.agent.trace import write_trace
 from birr.config import Settings
@@ -120,6 +122,35 @@ async def collect_reads(client, jpeg, settings: Settings, deadline: float, trace
             log.extend({"slot": "late", "ok": False, "error": "cancelled"} for _ in waiting)
 
 
+async def repeat_check(client, jpeg, labels, settings: Settings, deadline: float, trace) -> bool:
+    """Two reads of one photo can share a misread: in Hark's 3x111 run, both wrong totals were an
+    extra note of a value that appears more than once (L04: two 100s read where one sits). For each
+    repeated value, one narrow Muse count; the total stands only if every count matches."""
+    values = [money.to_denomination(label) for label in labels]
+    repeated = {v: n for v, n in Counter(v for v in values if v is not None).items() if n > 1}
+    if not repeated:
+        trace["repeat_check"] = {"asked": {}, "ok": True}
+        return True
+    started = time.perf_counter()
+    timeout = max(0.0, min(settings.repeat_check_timeout_s, deadline - time.perf_counter()))
+
+    async def count(value: int) -> int | None:
+        try:
+            return await asyncio.wait_for(muse.count_notes(client, jpeg, value, settings), timeout)
+        except (muse.MuseError, TimeoutError):
+            return None
+
+    counted = dict(zip(repeated, await asyncio.gather(*(count(v) for v in repeated)), strict=True))
+    ok = all(counted[v] == n for v, n in repeated.items())
+    trace["repeat_check"] = {
+        "asked": {str(v): n for v, n in repeated.items()},
+        "counted": {str(v): c for v, c in counted.items()},
+        "ok": ok,
+        "ms": _ms(started),
+    }
+    return ok
+
+
 async def execute(
     client: httpx.AsyncClient,
     jpeg: bytes,
@@ -199,6 +230,11 @@ async def execute(
         muse_only_totals=settings.muse_only_totals,
         sam_advisory=settings.sam_advisory,
     )
+    if settings.repeat_check and result["outcome"] == "total":
+        if not await repeat_check(client, jpeg, reads[0], settings, deadline, trace):
+            text = say.GIVE_UP if req.attempt >= req.max_attempts else say.RESCAN
+            result.update(outcome="rescan", total=None, change=None, hint=None, speech_en=text,
+                          path="repeat_check_failed")  # fmt: skip
     text = result.pop("speech_en")
     trace.update(
         sam_available=regions is not None,
