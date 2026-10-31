@@ -1,6 +1,6 @@
-// Record a short spoken question with the microphone (expo-audio). Two ways in:
-// hold the screen and let go (start + stop), or the Ask button, tapped twice (which TalkBack
-// users can reach). Recording also stops by itself after MAX_MS.
+// Record what the user says to the assistant (expo-audio). Two ways in: tap the screen, speak and
+// tap again (TalkBack: double tap twice), or hold the screen and let go. Recording also stops by
+// itself after MAX_MS.
 
 import { RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder } from 'expo-audio';
 import { useEffect, useRef, useState } from 'react';

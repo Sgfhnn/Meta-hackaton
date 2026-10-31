@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# End-to-end check of the release APK on an Android emulator, against the live backend.
-#   1. install, grant CAMERA + RECORD_AUDIO, launch: the app must start without a crash
-#   2. tap the screen: photo from the emulator camera -> POST /scan -> GET /scan/{id} -> spoken answer
-#   3. tap Ask, wait, tap again: recording -> POST /intent -> spoken answer
-#   4. hold the screen (the other way to ask): same round trip
-#   5. switch to Amharic (Oromo must not be offered), scan, then ask by voice: the request carries
-#      lang=am and the app stays in Amharic whatever the answer says
+# End-to-end check of the release APK (the voice assistant) on an Android emulator, against the
+# backend baked into the APK. The whole screen is one tap-to-talk button.
+#   1. install, grant CAMERA + RECORD_AUDIO, launch: first launch asks for the language; pick
+#      English (top half), then the app greets by voice ("[birr] screen: Hi, I'm Birr")
+#   2. tap the screen, wait, tap again: recording -> POST /assist -> 200 and a spoken answer
+#   3. a typed turn (birr://assist?text=count my money): /assist says scan -> live guidance posts
+#      small frames to POST /frame -> the photo goes to POST /scan -> GET /scan/{id} -> answer
+#   4. hold the screen and let go (the other way to talk): POST /assist -> 200
+#   5. "speak Amharic" (typed turn): action set_lang, the pill says አማርኛ; a tap-to-talk turn is
+#      sent with lang=am and the app stays in Amharic; an Amharic scan turn runs in Amharic
+#   6. relaunch: the language is remembered (no language question, lang am)
+# The emulator microphone hears silence, so spoken turns are proven by the 200 round trip (the
+# backend answers "Sorry, I couldn't hear that"); typed turns prove the actions.
 # Each answer must come from the backend, never the app's "cannot reach the server" prompt.
 # Output: e2e-out/ (screenshots, uiautomator dumps, logcat). Exit code != 0 on any failure.
 set -uo pipefail
@@ -44,15 +50,6 @@ wait_js() {
   return 1
 }
 jslines() { echo $(($(wc -l < "$JSLOG") + 1)); }
-# Centre of the Ask button in uiautomator dump $1, as "X Y" (empty if not found). It moves: the
-# message box under it grows with the text (two lines of Amharic push it up).
-ask_center() {
-  local b x1 y1 x2 y2
-  b=$(grep -o 'content-desc="Ask a question"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "$1" 2>/dev/null | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
-  [ -n "$b" ] || return 1
-  read -r x1 y1 x2 y2 <<<"$(echo "$b" | tr -c '0-9' ' ')"
-  echo "$(((x1 + x2) / 2)) $(((y1 + y2) / 2))"
-}
 # The last "screen:" message after line $1.
 screen_after() { tail -n +"$1" "$JSLOG" | grep -o '\[birr\] screen: .*' | tail -1 | sed 's/^\[birr\] screen: //'; }
 # CI emulators are slow and Android shows "System UI isn't responding" / "X isn't responding"
@@ -72,10 +69,40 @@ dismiss_dialogs() {
   fi
 }
 
+
+# Open a birr://assist link: a typed turn, as an Android shortcut would send it.
+link_turn() {
+  local enc
+  enc=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1")
+  adb shell "am start -W -a android.intent.action.VIEW -d 'birr://assist?text=$enc' $PKG" >/dev/null
+}
+# Tap, wait $1 s, tap again: one tap-to-talk turn.
+tap_talk() {
+  adb shell input tap $((W / 2)) $((H * 4 / 10))
+  sleep "$1"
+  adb shell input tap $((W / 2)) $((H * 4 / 10))
+}
+no_net_check() { # $1 label, $2 message
+  case "$2" in *"$NO_NET"*|*"ሰርቨሩን ማግኘት"*) fail "$1: app says it cannot reach the server" ;; esac
+}
+# Wait for a scan turn to go through guidance and /scan; $1 label.
+scan_round_trip() {
+  local since=$2
+  if wait_js 'guidance start' 40 "$since"; then log "$1: guidance started"; else fail "$1: guidance never started"; fi
+  if wait_js '\[birr\] POST /frame' 40 "$since"; then log "$1: /frame answered"; else fail "$1: POST /frame never answered"; fi
+  if wait_js 'guidance end' 60 "$since"; then log "$1: $(tail -n +"$since" "$JSLOG" | grep -o 'guidance end: .*' | tail -1)"; else fail "$1: guidance never ended"; fi
+  if wait_js '\[birr\] POST /scan' 60 "$since"; then log "$1: POST /scan answered"; else fail "$1: POST /scan never answered"; fi
+  if wait_js 'GET /scan/.* (done|error)|POST /scan -> 200|scan failed' 150 "$since"; then log "$1: scan job finished"; else fail "$1: scan job never finished"; fi
+  local frames
+  frames=$(tail -n +"$since" "$JSLOG" | grep -c 'POST /frame .*-> 200')
+  log "$1: $frames frame checks with 200"
+  [ "$frames" -ge 1 ] || fail "$1: no 200 from POST /frame"
+  tail -n +"$since" "$JSLOG" | grep -o 'POST /frame .*' | sort | uniq -c | tee "$OUT/$1-frames.txt"
+}
+
 log "runner public IP: $(curl -s -m 10 https://api.ipify.org || echo unknown)"
 log "start (UTC): $(date -u +%FT%TZ)"
 adb shell getprop ro.build.version.release
-adb shell getprop ro.product.cpu.abilist
 SIZE=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1)
 W=${SIZE%x*}; H=${SIZE#*x}
 log "screen ${W}x${H}"
@@ -92,171 +119,136 @@ dismiss_dialogs
 adb logcat -c
 adb logcat -v time -s ReactNativeJS:V AndroidRuntime:E > "$JSLOG" 2>/dev/null &
 LOGCAT_PID=$!
+
+# ---- 1. first launch: the language question, then the greeting
 log "launch"
 adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null
-# The welcome line is the first message, logged once the JS is running.
-if wait_js '\[birr\] screen:' 90 1; then log "JS running"; else fail "app JS never started"; fi
-sleep 8 # camera ready + welcome
+if wait_js '\[birr\] screen: choose a language' 90 1; then log "language question shown"; else fail "first launch did not ask for the language"; fi
+sleep 4
 dismiss_dialogs
-shot 01-launched
-dump 01-launched
-cat "$OUT/01-launched.txt"
-if ! adb shell pidof $PKG >/dev/null; then fail "app not running after launch (crash)"; fi
-grep -q 'Count money' "$OUT/01-launched.xml" 2>/dev/null || log "warning: 'Count money' control not in dump"
+shot 01-language
+dump 01-language
+cat "$OUT/01-language.txt"
+grep -q 'Built with Muse Spark Open' "$OUT/01-language.txt" || fail "'Built with Muse Spark Open' not on the start screen"
+SINCE=$(jslines)
+adb shell input tap $((W / 2)) $((H / 4)) # top half: English
+if wait_js "\[birr\] screen: Hi, I'm Birr" 40 "$SINCE"; then log "greeted"; else fail "no greeting after choosing English"; fi
+sleep 6
+dismiss_dialogs
+shot 02-greeting
+dump 02-greeting
+cat "$OUT/02-greeting.txt"
+adb shell pidof $PKG >/dev/null || fail "app not running after launch (crash)"
+grep -q 'content-desc="Talk to Birr"' "$OUT/02-greeting.xml" 2>/dev/null || fail "'Talk to Birr' control not in dump"
+grep -q 'Built with Muse Spark Open' "$OUT/02-greeting.txt" || fail "'Built with Muse Spark Open' not on the main screen"
+grep -q 'content-desc="Ask a question"' "$OUT/02-greeting.xml" 2>/dev/null && fail "the old Ask button is still there"
 
-# ---- scan: tap the big area (middle of the screen, above the Ask button)
-log "scan: tap ${W}/2 x ${H}*4/10"
+# ---- 2. tap to talk
+log "tap to talk: tap, 4 s, tap"
 dismiss_dialogs
 SINCE=$(jslines)
-adb shell input tap $((W / 2)) $((H * 4 / 10))
+tap_talk 4
+if wait_js '\[birr\] POST /assist|/assist failed' 60 "$SINCE"; then log "assist turn finished"; else fail "POST /assist never answered (or never sent)"; fi
+sleep 4
+shot 03-talk
+MSG=$(screen_after "$SINCE")
+log "tap-to-talk answer on screen: $MSG"
+tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] POST /assist.*' | tee "$OUT/talk-request.txt"
+grep -q 'POST /assist lang=en -> 200' "$OUT/talk-request.txt" || fail "tap to talk: no 200 from POST /assist with lang=en"
+no_net_check "tap to talk" "$MSG"
+case "$MSG" in ""|"Listening."|*"Hold the screen"*|*"allow the microphone"*) fail "tap to talk: no backend answer on screen ($MSG)" ;; esac
+
+# ---- 3. a scan turn: /assist -> guidance (/frame) -> /scan
 sleep 3
-shot 02-counting
-if wait_js '\[birr\] POST /scan' 60 "$SINCE"; then log "POST /scan answered"; else fail "POST /scan never answered (or never sent)"; fi
-if wait_js 'GET /scan/.* (done|error)|POST /scan -> 200|scan failed' 120 "$SINCE"; then log "scan job finished"; else fail "scan job never finished"; fi
-sleep 3
-shot 03-scan-answer
-dump 03-scan-answer
+log "typed turn: count my money"
+dismiss_dialogs
+SINCE=$(jslines)
+link_turn "count my money"
+if wait_js '\[birr\] POST /assist .*action=scan' 60 "$SINCE"; then log "assist said scan"; else fail "count my money: /assist did not answer action=scan"; fi
+scan_round_trip scan "$SINCE"
+sleep 4
+shot 04-scan-answer
 MSG=$(screen_after "$SINCE")
 log "scan answer on screen: $MSG"
 echo "$MSG" > "$OUT/scan-answer.txt"
-case "$MSG" in
-  *"$NO_NET"*) fail "scan: app says it cannot reach the server" ;;
-  ""|"Counting."|*"could not count that"*) fail "scan: no backend answer on screen ($MSG)" ;;
-esac
-tail -n +"$SINCE" "$JSLOG" | grep -q 'GET /scan/' || fail "scan: job was never polled"
-
-# ---- voice: Ask button (tap, speak, tap again)
-sleep 4
-ASK=$(grep -o 'content-desc="Ask a question"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "$OUT/03-scan-answer.xml" 2>/dev/null | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
-if [ -n "$ASK" ]; then
-  read -r X1 Y1 X2 Y2 <<<"$(echo "$ASK" | tr -c '0-9' ' ')"
-  AX=$(((X1 + X2) / 2)); AY=$(((Y1 + Y2) / 2))
-else
-  log "Ask bounds not found in dump, guessing"
-  AX=$((W / 2)); AY=$((H * 78 / 100))
+no_net_check scan "$MSG"
+case "$MSG" in ""|"Counting."|*"could not count that"*) fail "scan: no backend answer on screen ($MSG)" ;; esac
+# A guide/rescan answer starts another look by itself; let it finish before the next step.
+wait_js 'guidance end' 1 "$(jslines)" || true
+sleep 8
+if tail -n +"$SINCE" "$JSLOG" | grep -q 'guidance start (attempt 2)'; then
+  log "the answer asked for another look; waiting for it"
+  wait_js 'GET /scan/.* (done|error)' 150 "$(jslines)" || true
+  sleep 15
 fi
-log "voice (Ask button): tap $AX,$AY, wait 3 s, tap again"
-dismiss_dialogs
-SINCE=$(jslines)
-adb shell input tap $AX $AY
-sleep 3
-shot 04-listening
-dump 04-listening
-adb shell input tap $AX $AY
-if wait_js '\[birr\] POST /intent|intent failed' 60 "$SINCE"; then log "intent request finished"; else fail "POST /intent never answered (or never sent)"; fi
-sleep 3
-shot 05-intent-answer
-dump 05-intent-answer
-MSG=$(screen_after "$SINCE")
-log "intent answer on screen: $MSG"
-echo "$MSG" > "$OUT/intent-answer.txt"
-tail -n +"$SINCE" "$JSLOG" | grep -qE 'POST /intent( lang=[a-z]+)? -> 200' || fail "intent: no 200 from POST /intent"
-case "$MSG" in
-  *"$NO_NET"*) fail "intent: app says it cannot reach the server" ;;
-  ""|"Listening."|*"Hold the screen"*|*"allow the microphone"*) fail "intent: no backend answer on screen ($MSG)" ;;
-esac
 
-# ---- voice: hold the screen 3 s and let go
-sleep 4
-# 7.5 s (the app stops by itself at 8 s): the CI emulator can take several seconds to start the
-# recorder (logged as "recording started after N ms"); a phone takes a fraction of a second.
-log "voice (hold the screen 7.5 s)"
+# ---- 4. hold to talk
+log "hold to talk (7.5 s)"
 dismiss_dialogs
 SINCE=$(jslines)
 adb shell input swipe $((W / 2)) $((H * 4 / 10)) $((W / 2)) $((H * 4 / 10)) 7500
-if wait_js '\[birr\] POST /intent|intent failed' 60 "$SINCE"; then log "hold-to-ask finished"; else fail "hold-to-ask: POST /intent never answered"; fi
+if wait_js '\[birr\] POST /assist|/assist failed' 60 "$SINCE"; then log "hold-to-talk finished"; else fail "hold to talk: POST /assist never answered"; fi
 sleep 3
-shot 06-hold-answer
-dump 06-hold-answer
+shot 05-hold
+tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /assist lang=en -> 200' || fail "hold to talk: no 200 from POST /assist"
+no_net_check "hold to talk" "$(screen_after "$SINCE")"
+
+# ---- 5. switch to Amharic by voice (typed), then Amharic must stay Amharic
+sleep 3
+log "typed turn: speak Amharic"
+dismiss_dialogs
+SINCE=$(jslines)
+link_turn "please speak Amharic"
+if wait_js '\[birr\] POST /assist .*action=set_lang lang=am' 60 "$SINCE"; then log "assist switched to Amharic"; else fail "speak Amharic: no set_lang to am"; fi
+wait_js '\[birr\] lang: am' 10 "$SINCE" || fail "the app did not switch to Amharic"
+sleep 12 # the confirmation clip plays; the phrase clips download
+dismiss_dialogs
+shot 06-amharic
+dump 06-amharic
+cat "$OUT/06-amharic.txt"
+grep -q 'አማርኛ' "$OUT/06-amharic.txt" || fail "language pill does not say አማርኛ after set_lang"
+
+log "tap to talk in Amharic"
+SINCE=$(jslines)
+tap_talk 4
+if wait_js '\[birr\] POST /assist|/assist failed' 60 "$SINCE"; then log "Amharic assist turn finished"; else fail "Amharic: POST /assist never answered"; fi
+sleep 8
+tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] POST /assist.*' | tee "$OUT/amharic-talk-request.txt"
+grep -q 'POST /assist lang=am -> 200' "$OUT/amharic-talk-request.txt" || fail "Amharic: /assist was not sent with lang=am (or not 200)"
+grep -q 'lang=am by=' "$OUT/amharic-talk-request.txt" || fail "Amharic: /assist did not answer in am"
+if tail -n +"$SINCE" "$JSLOG" | grep -qE '\[birr\] lang: (en|om)'; then fail "Amharic: the app switched language after a voice turn"; fi
+dump 07-amharic-talk
+grep -q 'content-desc="Language: Amharic"' "$OUT/07-amharic-talk.xml" 2>/dev/null || fail "Amharic: pill no longer Amharic after a voice turn"
+no_net_check "Amharic talk" "$(screen_after "$SINCE")"
+
+log "typed Amharic scan turn"
+SINCE=$(jslines)
+link_turn "ብሬን ቁጠርልኝ"
+if wait_js '\[birr\] POST /assist lang=am .*action=scan lang=am' 60 "$SINCE"; then log "Amharic scan turn"; else fail "Amharic count: /assist did not answer scan in am"; fi
+scan_round_trip amharic-scan "$SINCE"
+sleep 8
+shot 08-amharic-answer
 MSG=$(screen_after "$SINCE")
-log "hold-to-ask answer on screen: $MSG"
-tail -n +"$SINCE" "$JSLOG" | grep -qE 'POST /intent( lang=[a-z]+)? -> 200' || fail "hold-to-ask: no 200 from POST /intent"
-case "$MSG" in
-  *"$NO_NET"*) fail "hold-to-ask: app says it cannot reach the server" ;;
-  ""|"Listening."|*"Hold the screen"*|*"allow the microphone"*) fail "hold-to-ask: no backend answer on screen ($MSG)" ;;
-esac
+log "Amharic scan answer on screen: $MSG"
+echo "$MSG" > "$OUT/amharic-answer.txt"
+no_net_check "Amharic scan" "$MSG"
+tail -n +"$SINCE" "$JSLOG" | grep -q 'POST /frame lang=am' || fail "Amharic: /frame not sent with lang=am"
+if tail -n +"$SINCE" "$JSLOG" | grep -qE 'clip failed|clip did not start'; then fail "Amharic clip did not play"; fi
+if tail -n +"$SINCE" "$JSLOG" | grep -qE '\[birr\] lang: (en|om)'; then fail "Amharic: language switched during the scan"; fi
 
-# ---- language switch, then one more scan so the Amharic clips are fetched and played
-sleep 3
-log "language: tap the language pill"
-LB=$(grep -o 'content-desc="Language: [^"]*"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "$OUT/06-hold-answer.xml" 2>/dev/null | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
-if [ -n "$LB" ]; then
-  read -r X1 Y1 X2 Y2 <<<"$(echo "$LB" | tr -c '0-9' ' ')"
-  dismiss_dialogs
-  adb shell input tap $(((X1 + X2) / 2)) $(((Y1 + Y2) / 2))
-  sleep 6
-  shot 07-language
-  dump 07-language
-  cat "$OUT/07-language.txt"
-else
-  log "language pill not found"
-fi
+# ---- 6. relaunch: the language is remembered
+sleep 10
+log "relaunch"
+adb shell am force-stop $PKG
+sleep 2
+SINCE=$(jslines)
+adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null
+if wait_js '\[birr\] lang: ' 60 "$SINCE"; then log "$(tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] lang: .*' | head -1)"; else fail "relaunch: app JS never started"; fi
+sleep 8
+tail -n +"$SINCE" "$JSLOG" | grep -q 'choose a language' && fail "relaunch: asked for the language again"
+tail -n +"$SINCE" "$JSLOG" | grep -q '\[birr\] lang: am' || fail "relaunch: language not remembered (expected am)"
+shot 09-relaunch
 
-# ---- one scan in Amharic: prompts and the answer play as clips from the backend (GET /speak)
-if grep -q 'አማርኛ' "$OUT/07-language.txt" 2>/dev/null; then
-  sleep 10 # let the phrase clips download
-  dismiss_dialogs
-  SINCE=$(jslines)
-  log "scan in Amharic"
-  adb shell input tap $((W / 2)) $((H * 4 / 10))
-  if wait_js 'GET /scan/.* (done|error)|POST /scan -> 200|scan failed' 150 "$SINCE"; then log "Amharic scan finished"; else fail "Amharic scan never finished"; fi
-  sleep 8 # the answer clip plays
-  shot 08-amharic-answer
-  dump 08-amharic-answer
-  MSG=$(screen_after "$SINCE")
-  log "Amharic answer on screen: $MSG"
-  echo "$MSG" > "$OUT/amharic-answer.txt"
-  case "$MSG" in *"$NO_NET"*|*"ሰርቨሩን ማግኘት"*) fail "Amharic scan: app says it cannot reach the server" ;; esac
-  if tail -n +"$SINCE" "$JSLOG" | grep -qE 'clip failed|clip did not start'; then fail "Amharic clip did not play"; fi
-
-  # ---- a voice question in Amharic: the app must stay in Amharic (the phone bug: it flipped back
-  # to English when the backend guessed the question was English)
-  sleep 4
-  dismiss_dialogs
-  read -r BX BY <<<"$(ask_center "$OUT/08-amharic-answer.xml" || echo "$AX $AY")"
-  log "voice in Amharic (Ask button): tap $BX,$BY, wait 3 s, tap Ask again"
-  SINCE=$(jslines)
-  adb shell input tap $BX $BY
-  sleep 3
-  dump 09-amharic-listening
-  read -r BX BY <<<"$(ask_center "$OUT/09-amharic-listening.xml" || echo "$BX $BY")"
-  log "second tap at $BX,$BY"
-  adb shell input tap $BX $BY
-  if wait_js '\[birr\] POST /intent|intent failed' 60 "$SINCE"; then log "Amharic intent finished"; else fail "Amharic: POST /intent never answered"; fi
-  sleep 8 # the answer (clip or voice) plays
-  shot 09-amharic-intent
-  dump 09-amharic-intent
-  MSG=$(screen_after "$SINCE")
-  log "Amharic intent answer on screen: $MSG"
-  echo "$MSG" > "$OUT/amharic-intent-answer.txt"
-  tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] POST /intent.*' | tee "$OUT/amharic-intent-request.txt"
-  grep -q 'POST /intent lang=am -> 200' "$OUT/amharic-intent-request.txt" || fail "Amharic: /intent was not sent with lang=am (or not 200)"
-  tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] intent answered in .*' || true
-  if tail -n +"$SINCE" "$JSLOG" | grep -qE '\[birr\] lang: (en|om)'; then fail "Amharic: the app switched language after a voice question"; fi
-  grep -q 'content-desc="Language: Amharic"' "$OUT/09-amharic-intent.xml" 2>/dev/null || fail "Amharic: language pill no longer says Amharic after the voice question"
-  grep -q 'አማርኛ' "$OUT/09-amharic-intent.txt" 2>/dev/null || fail "Amharic: pill label አማርኛ gone after the voice question"
-  case "$MSG" in *"$NO_NET"*|*"ሰርቨሩን ማግኘት"*) fail "Amharic intent: app says it cannot reach the server" ;; esac
-
-  # ---- the pill cycles Amharic -> English: Oromo is parked and must not be offered
-  LB=$(grep -o 'content-desc="Language: [^"]*"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "$OUT/09-amharic-intent.xml" 2>/dev/null | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
-  if [ -n "$LB" ]; then
-    read -r X1 Y1 X2 Y2 <<<"$(echo "$LB" | tr -c '0-9' ' ')"
-    dismiss_dialogs
-    adb shell input tap $(((X1 + X2) / 2)) $(((Y1 + Y2) / 2))
-    sleep 4
-    shot 10-language-next
-    dump 10-language-next
-    grep -q 'content-desc="Language: English"' "$OUT/10-language-next.xml" 2>/dev/null || fail "language pill after Amharic is not English (Oromo offered?)"
-  else
-    fail "language pill not found after the Amharic voice question"
-  fi
-else
-  fail "Amharic not offered (backend /health said no translation?)"
-fi
-
-# Oromo is parked: never offered, never selected.
-grep -o '\[birr\] langs offered: .*' "$JSLOG" | tail -1 | tee "$OUT/langs-offered.txt"
-grep -qE 'offered: (.*,)?om(,|$)' "$OUT/langs-offered.txt" && fail "Oromo is offered"
 grep -qE '\[birr\] lang: om|Afaan Oromoo' "$JSLOG" "$OUT"/*.txt 2>/dev/null && fail "Oromo was selected or shown"
 
 sleep 2
@@ -267,14 +259,11 @@ adb logcat -d > "$OUT/logcat-full.txt"
 kill $LOGCAT_PID 2>/dev/null || true
 echo "---- ReactNativeJS"
 cat "$OUT/logcat-js.txt"
-# console.error / red box / unhandled rejections log at E; the app's own console.warn lines (W) are
-# listed for reading, and the checks above already fail on any that broke a flow.
 if grep -qE 'E/ReactNativeJS|Unhandled promise rejection|Invariant Violation' "$OUT/logcat-js.txt"; then
   fail "JS error or crash in logcat"
 fi
 echo "---- app warnings"
 grep 'W/ReactNativeJS' "$OUT/logcat-js.txt" || echo "(none)"
-# Only our process: other emulator apps (Gmail, Play services) crash on CI images now and then.
 grep -A1 'FATAL EXCEPTION' "$OUT/logcat-full.txt" | grep -q "Process: $PKG" && fail "native crash in $PKG"
 
 if [ "$FAIL" -ne 0 ]; then log "E2E FAILED"; exit 1; fi

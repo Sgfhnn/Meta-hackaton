@@ -73,7 +73,11 @@ export type PhraseKey =
   | 'listening'
   | 'tooShort'
   | 'micNeeded'
-  | 'heardFailed';
+  | 'heardFailed'
+  | 'greeting'
+  | 'chooseLanguage'
+  | 'holdStill'
+  | 'thinking';
 
 export type Phrases = Partial<Record<PhraseKey, { text: string; audio: string | null }>>;
 
@@ -91,4 +95,38 @@ export type JobStatus = Partial<Spoken> & {
   result: ScanResponse | null;
   poll_after_ms?: number;
   error?: string;
+};
+
+// POST /assist: one turn of the voice assistant (docs/api.md section 7).
+export type AssistAction = 'none' | 'scan' | 'change' | 'set_lang' | 'repeat' | 'help' | 'stop';
+
+export type AssistResponse = Spoken & {
+  action: AssistAction;
+  intent: 'count' | 'change' | null;
+  lang: Lang;
+  paid: number | null;
+  price: number | null;
+  needs: 'ask' | null;
+  heard: boolean;
+  decided_by?: string;
+  trace_id?: string;
+  timing_ms?: Record<string, number>;
+};
+
+// What the app tells /assist about the conversation so far.
+export type AssistState = {
+  last_total: number | null;
+  last_notes: number[];
+  pending_paid: number | null;
+  pending_price: number | null;
+};
+
+// POST /frame: is this small camera frame good enough to count? (docs/api.md section 8)
+export type FrameStatus = 'ok' | 'dark' | 'bright' | 'blurry' | 'no_notes' | 'far' | 'cut_off';
+
+export type FrameResponse = Spoken & {
+  status: FrameStatus;
+  side: 'left' | 'right' | 'top' | 'bottom' | null;
+  ready: boolean;
+  ms?: number;
 };

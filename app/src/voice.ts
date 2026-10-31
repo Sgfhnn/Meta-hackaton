@@ -25,6 +25,11 @@ export const PROMPTS: Record<PhraseKey, string> = {
   tooShort: 'Hold the screen while you speak, then let go.',
   micNeeded: 'To ask by voice, allow the microphone. You can still tap to count.',
   heardFailed: "Sorry, I couldn't hear that. Please try again.",
+  greeting:
+    "Hi, I'm Birr. Put your notes flat on a table. Tap anywhere and tell me what you need, like count my money.",
+  chooseLanguage: 'Tap the top half for English, or the bottom half for Amharic.',
+  holdStill: 'Hold still, counting.',
+  thinking: 'One moment.',
 };
 
 let installed: Set<string> | null = null;
@@ -72,6 +77,19 @@ export function stopSpeaking(): void {
 export function say(text: string, locale = LOCALE.en): void {
   stopSpeaking();
   if (text) Speech.speak(text, { language: locale, rate: 0.95 });
+}
+
+/** Say this now, then call `then` when it has been said (or could not be). */
+export function sayThen(text: string, locale: string, then: () => void): void {
+  stopSpeaking();
+  let called = false;
+  const once = () => {
+    if (!called) {
+      called = true;
+      then();
+    }
+  };
+  Speech.speak(text, { language: locale, rate: 0.95, onDone: once, onStopped: once, onError: once });
 }
 
 /** Add to the queue without interrupting (used for the waiting cue). */
