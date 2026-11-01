@@ -78,7 +78,9 @@ export type PhraseKey =
   | 'chooseLanguage'
   | 'holdStill'
   | 'thinking'
-  | 'languageChosen';
+  | 'languageChosen'
+  | 'permissionsIntro'
+  | 'permissionsDone';
 
 export type Phrases = Partial<Record<PhraseKey, { text: string; audio: string | null }>>;
 

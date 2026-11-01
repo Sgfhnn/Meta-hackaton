@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # End-to-end check of the release APK (the voice assistant) on an Android emulator, against the
 # backend baked into the APK. The whole screen is one tap-to-talk button.
-#   1. install, grant CAMERA + RECORD_AUDIO, launch: first launch asks for the language; pick
-#      English (top half), then the app greets by voice ("[birr] screen: Hi, I'm Birr")
+#   1. install (no permissions granted), launch: first launch asks for the language; pick
+#      English (top half). The app explains the permissions by voice and opens the camera dialog
+#      and then the microphone dialog by itself (no tap in the app); the test answers each dialog
+#      with "While using the app". Then "Thank you. All set." and the greeting by voice
+#      ("[birr] screen: Hi, I'm Birr")
 #   2. tap the screen, wait, tap again: recording -> POST /assist -> 200 and a spoken answer
 #   3. a typed turn (birr://assist?text=count my money): /assist says scan -> live guidance posts
 #      small frames to POST /frame -> the photo goes to POST /scan -> GET /scan/{id} -> answer
@@ -10,7 +13,8 @@
 #   5. "speak Amharic" (typed turn): action set_lang, its Amharic clip starts ('[birr] clip started',
 #      no 'clip did not start' / 'clip failed' anywhere in the run), the pill says አማርኛ; a tap-to-talk turn is
 #      sent with lang=am and the app stays in Amharic; an Amharic scan turn runs in Amharic
-#   6. relaunch: the language is remembered (no language question, lang am)
+#   6. relaunch: the language is remembered (no language question, lang am, no permission
+#      explanation)
 # The emulator microphone hears silence, so spoken turns are proven by the 200 round trip (the
 # backend answers "Sorry, I couldn't hear that"); typed turns prove the actions.
 # Each answer must come from the backend, never the app's "cannot reach the server" prompt.
@@ -101,6 +105,29 @@ hold_talk() {
   sleep "$1"
   adb shell input motionevent UP $x $y
 }
+# Answer an Android permission dialog with "While using the app" (or "Allow"); $1 label.
+# Taps only the system dialog, never the app. Fails if no dialog shows within $2 s.
+allow_dialog() {
+  local deadline=$((SECONDS + $2)) xml b x1 y1 x2 y2
+  while ((SECONDS < deadline)); do
+    if adb shell uiautomator dump /sdcard/perm.xml >/dev/null 2>&1; then
+      xml=$(adb shell cat /sdcard/perm.xml 2>/dev/null)
+      b=$(grep -oE 'resource-id="com.android.permissioncontroller:id/permission_allow_(foreground_only_)?button"[^>]*bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' <<<"$xml" | grep -oE '\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1)
+      if [ -n "$b" ]; then
+        adb shell cat /sdcard/perm.xml > "$OUT/perm-$1.xml" 2>/dev/null
+        grep -o 'text="[^"]*"' "$OUT/perm-$1.xml" | sed 's/^text="//;s/"$//' | grep -v '^$' > "$OUT/perm-$1.txt"
+        shot "perm-$1"
+        read -r x1 y1 x2 y2 <<<"$(echo "$b" | tr -c '0-9' ' ')"
+        log "$1 dialog: $(tr '\n' '|' < "$OUT/perm-$1.txt"), tapping allow"
+        adb shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2))
+        return 0
+      fi
+      grep -q "isn't responding" <<<"$xml" && dismiss_dialogs
+    fi
+    sleep 2
+  done
+  return 1
+}
 no_net_check() { # $1 label, $2 message
   case "$2" in *"$NO_NET"*|*"ሰርቨሩን ማግኘት"*) fail "$1: app says it cannot reach the server" ;; esac
 }
@@ -149,11 +176,11 @@ W=${SIZE%x*}; H=${SIZE#*x}
 log "screen ${W}x${H}"
 
 log "install $APK"
-adb install -r -g "$APK" || { fail "install failed"; exit 1; }
-adb shell pm grant $PKG android.permission.CAMERA
-adb shell pm grant $PKG android.permission.RECORD_AUDIO
-adb shell dumpsys package $PKG | grep -E 'android.permission.(CAMERA|RECORD_AUDIO|INTERNET)' | tee "$OUT/permissions.txt"
-grep -q 'RECORD_AUDIO: granted=true' "$OUT/permissions.txt" || fail "RECORD_AUDIO not granted (missing from manifest?)"
+# No -g and no pm grant: the app asks for the camera and microphone itself (step 1).
+adb install -r "$APK" || { fail "install failed"; exit 1; }
+adb shell dumpsys package $PKG | grep -E 'android.permission.(CAMERA|RECORD_AUDIO|INTERNET)' | tee "$OUT/permissions-before.txt"
+grep -q 'RECORD_AUDIO' "$OUT/permissions-before.txt" || fail "RECORD_AUDIO not requested (missing from manifest?)"
+grep -qE 'CAMERA: granted=true' "$OUT/permissions-before.txt" && fail "CAMERA already granted before the app asked"
 
 adb shell settings put global hide_error_dialogs 1 || true
 dismiss_dialogs
@@ -173,7 +200,24 @@ cat "$OUT/01-language.txt"
 grep -q 'Built with Muse Spark Open' "$OUT/01-language.txt" || fail "'Built with Muse Spark Open' not on the start screen"
 SINCE=$(jslines)
 adb shell input tap $((W / 2)) $((H / 4)) # top half: English
+# 1a. permissions: spoken explanation, then the two system dialogs open by themselves.
+if wait_js '\[birr\] permissions: intro' 60 "$SINCE"; then log "permissions explained"; else fail "no permissions explanation after choosing English"; fi
+grep -q "screen: I need the camera to see your money" "$JSLOG" || fail "permissions explanation not on screen"
+if wait_js '\[birr\] permissions: asking for the camera' 60 "$SINCE"; then log "camera dialog asked for by the app"; else fail "the app did not open the camera dialog by itself"; fi
+allow_dialog camera 40 || fail "no camera permission dialog"
+if wait_js '\[birr\] permissions: camera granted' 30 "$SINCE"; then log "camera granted"; else fail "camera not granted through the dialog"; fi
+if wait_js '\[birr\] permissions: asking for the microphone' 30 "$SINCE"; then log "microphone dialog asked for by the app"; else fail "the app did not open the microphone dialog by itself"; fi
+allow_dialog microphone 40 || fail "no microphone permission dialog"
+if wait_js '\[birr\] permissions: microphone granted' 30 "$SINCE"; then log "microphone granted"; else fail "microphone not granted through the dialog"; fi
+adb shell dumpsys package $PKG | grep -E 'android.permission.(CAMERA|RECORD_AUDIO)' | tee "$OUT/permissions.txt"
+grep -q 'CAMERA: granted=true' "$OUT/permissions.txt" || fail "CAMERA not granted after the dialog"
+grep -q 'RECORD_AUDIO: granted=true' "$OUT/permissions.txt" || fail "RECORD_AUDIO not granted after the dialog"
+if wait_js '\[birr\] screen: Thank you. All set.' 60 "$SINCE"; then log "thanked"; else fail "no 'Thank you. All set.' after both permissions"; fi
 if wait_js "\[birr\] screen: Hi, I'm Birr" 90 "$SINCE"; then log "greeted"; else fail "no greeting after choosing English"; fi
+THANKED_AT=$(tail -n +"$SINCE" "$JSLOG" | grep -n 'screen: Thank you. All set.' | head -1 | cut -d: -f1)
+HI_AT=$(tail -n +"$SINCE" "$JSLOG" | grep -n "screen: Hi, I'm Birr" | head -1 | cut -d: -f1)
+[ -n "$THANKED_AT" ] && [ -n "$HI_AT" ] && [ "$HI_AT" -lt "$THANKED_AT" ] && fail "greeting came before 'Thank you. All set.'"
+tail -n +"$SINCE" "$JSLOG" | grep -q 'screen: This app needs the camera' && fail "cameraNeeded said although the camera was allowed"
 sleep 6
 dismiss_dialogs
 shot 02-greeting
@@ -340,6 +384,7 @@ adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null
 if wait_js '\[birr\] lang: ' 60 "$SINCE"; then log "$(tail -n +"$SINCE" "$JSLOG" | grep -o '\[birr\] lang: .*' | head -1)"; else fail "relaunch: app JS never started"; fi
 sleep 8
 tail -n +"$SINCE" "$JSLOG" | grep -q 'choose a language' && fail "relaunch: asked for the language again"
+tail -n +"$SINCE" "$JSLOG" | grep -q 'permissions: intro' && fail "relaunch: explained the permissions again"
 tail -n +"$SINCE" "$JSLOG" | grep -q '\[birr\] lang: am' || fail "relaunch: language not remembered (expected am)"
 shot 09-relaunch
 

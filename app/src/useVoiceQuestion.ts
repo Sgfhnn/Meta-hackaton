@@ -252,6 +252,17 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
     if (!wanted.current) void finish('manual');
   }
 
+  /**
+   * Ask for the microphone now (first launch, right after the camera). Counts as this launch's
+   * one ask, so hands-free listening after the greeting does not open the dialog again.
+   */
+  async function askPermission(): Promise<boolean> {
+    askedPermission.current = true;
+    let permission = await getRecordingPermissionsAsync();
+    if (!permission.granted && permission.canAskAgain) permission = await requestRecordingPermissionsAsync();
+    return permission.granted;
+  }
+
   /** The app is about to play a clip: throw away a hands-free take that has heard nothing yet. */
   function yieldToApp(): Promise<void> {
     if (active.current && mode.current === 'auto' && !speechAt.current) return finish('app speaking');
@@ -264,6 +275,7 @@ export function useVoiceQuestion(onDone: (recording: Recording) => void) {
     stop,
     cancel,
     yieldToApp,
+    askPermission,
     /** A hands-free take is running. */
     isAuto: () => active.current && mode.current === 'auto',
     /** The hands-free take has heard speech. */

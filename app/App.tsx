@@ -3,6 +3,7 @@
 // Spark Open decides what to do, and the app does it: count the notes with live camera guidance,
 // check change, switch language, repeat or explain. Totals come only from the backend (docs/api.md).
 
+import { getRecordingPermissionsAsync } from 'expo-audio';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -61,11 +62,19 @@ const YELLOW = '#FFD23F';
 type ChangeCheck = { paid: number; price: number; at: number };
 type Mode = 'idle' | 'thinking' | 'guiding' | 'counting';
 type LastAnswer = { answer: Spoken; lang: Lang };
+// First launch: 'language' (the language screen), then 'asking' (the camera and microphone
+// dialogs open by themselves after a spoken explanation), then 'done'. Later launches: 'done'.
+type Onboarding = 'language' | 'asking' | 'done';
 
 const SESSION_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 export default function App() {
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission, getPermission] = useCameraPermissions();
+  const [onboarding, setOnboarding] = useState<Onboarding>(() => (savedLang() === null ? 'language' : 'done'));
+  const onboardingRef = useRef<Onboarding>(onboarding);
+  // Said before the greeting: "Thank you. All set." after both dialogs were allowed, or how to
+  // allow the microphone when it was refused.
+  const beforeGreeting = useRef<PhraseKey | null>(null);
   const camera = useRef<CameraView>(null);
   const attempt = useRef(1);
   const welcomed = useRef(false);
@@ -134,7 +143,7 @@ export default function App() {
       if (!m) return;
       const text = decodeURIComponent(m[1].replace(/\+/g, ' ')).slice(0, 300);
       console.log(`[birr] link turn (${text.length} chars)`);
-      if (savedLang()) void talk({ text });
+      if (savedLang() && onboardingRef.current === 'done') void talk({ text });
     };
     Linking.getInitialURL().then(open);
     const sub = Linking.addEventListener('url', (e) => open(e.url));
@@ -156,9 +165,60 @@ export default function App() {
   }, [message]);
 
   useEffect(() => {
-    if (lang && permission && !permission.granted) sayPrompt('cameraNeeded', lang);
+    if (lang && onboarding === 'done' && permission && !permission.granted) sayPrompt('cameraNeeded', lang);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [permission?.granted, lang]);
+  }, [permission?.granted, lang, onboarding]);
+
+  function setOnboardingBoth(o: Onboarding) {
+    onboardingRef.current = o;
+    setOnboarding(o);
+  }
+
+  /** The language screen: save the language, say so, then ask for the camera and microphone. */
+  function chooseFirstLanguage(next: Lang) {
+    if (onboardingRef.current !== 'language') return; // a second tap while it is speaking
+    setOnboardingBoth('asking');
+    chooseLanguage(next);
+    void askPermissions();
+  }
+
+  /**
+   * First launch, for blind users: no button to find. Say what the two dialogs are for and how to
+   * answer them with TalkBack, then open the camera dialog and the microphone dialog by themselves.
+   */
+  async function askPermissions() {
+    try {
+      let cam = await getPermission();
+      const mic = await getRecordingPermissionsAsync();
+      if (cam.granted && mic.granted) {
+        console.log('[birr] permissions: already granted');
+        return;
+      }
+      await sleep(400);
+      await whenQuiet(15_000); // "Okay, I will speak Amharic now." first
+      console.log('[birr] permissions: intro');
+      announcePrompt('permissionsIntro');
+      await sleep(400);
+      await whenQuiet(30_000);
+      if (!cam.granted && cam.canAskAgain) {
+        console.log('[birr] permissions: asking for the camera');
+        cam = await requestPermission();
+      }
+      console.log(`[birr] permissions: camera ${cam.granted ? 'granted' : 'denied'}`);
+      let micOk = mic.granted;
+      if (!micOk) {
+        console.log('[birr] permissions: asking for the microphone');
+        micOk = await question.askPermission();
+      }
+      console.log(`[birr] permissions: microphone ${micOk ? 'granted' : 'denied'}`);
+      // Camera refused: the full-screen "allow the camera" button says cameraNeeded instead.
+      beforeGreeting.current = !micOk ? 'micNeeded' : cam.granted ? 'permissionsDone' : null;
+    } catch (e) {
+      console.warn('[birr] permissions: asking failed', e);
+    } finally {
+      setOnboardingBoth('done');
+    }
+  }
 
   function chooseLanguage(next: Lang, announce = true) {
     saveLang(next);
@@ -640,6 +700,13 @@ export default function App() {
       // Let "Okay, I will speak Amharic now." finish first.
       setTimeout(async () => {
         await whenQuiet(10_000);
+        const first = beforeGreeting.current;
+        beforeGreeting.current = null;
+        if (first) {
+          announcePrompt(first); // "Thank you. All set." (or how to allow the microphone)
+          await sleep(400);
+          await whenQuiet(20_000);
+        }
         announcePrompt('greeting');
         void listenSoon('greeting');
       }, current() === 'en' ? 300 : 1500);
@@ -663,7 +730,7 @@ export default function App() {
       <View style={styles.screen}>
         <Pressable
           style={[styles.half, styles.center]}
-          onPress={() => chooseLanguage('en')}
+          onPress={() => chooseFirstLanguage('en')}
           accessibilityRole="button"
           accessibilityLabel="English"
           accessibilityHint="Use the app in English"
@@ -672,13 +739,24 @@ export default function App() {
         </Pressable>
         <Pressable
           style={[styles.half, styles.center, styles.halfBottom]}
-          onPress={() => chooseLanguage('am')}
+          onPress={() => chooseFirstLanguage('am')}
           accessibilityRole="button"
           accessibilityLabel="አማርኛ, Amharic"
           accessibilityHint="መተግበሪያውን በአማርኛ ይጠቀሙ"
         >
           <Text style={styles.big}>አማርኛ</Text>
         </Pressable>
+        {museNote}
+        <StatusBar style="light" />
+      </View>
+    );
+  }
+
+  // The two permission dialogs open over this by themselves (no button to find).
+  if (onboarding === 'asking') {
+    return (
+      <View style={[styles.screen, styles.center]}>
+        <Text style={styles.medium}>{promptText('permissionsIntro', lang)}</Text>
         {museNote}
         <StatusBar style="light" />
       </View>
@@ -786,6 +864,7 @@ const styles = StyleSheet.create({
   half: { flex: 1 },
   halfBottom: { borderTopWidth: 3, borderTopColor: YELLOW },
   big: { color: '#fff', fontSize: 40, fontWeight: '700', textAlign: 'center' },
+  medium: { color: '#fff', fontSize: 28, fontWeight: '700', textAlign: 'center' },
   pill: {
     position: 'absolute',
     top: 48,

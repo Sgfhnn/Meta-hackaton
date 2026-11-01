@@ -51,6 +51,9 @@ export const PROMPTS: Record<PhraseKey, string> = {
   holdStill: 'Hold still, counting.',
   thinking: 'One moment.',
   languageChosen: 'Okay, I will speak this language now.',
+  permissionsIntro:
+    'I need the camera to see your money and the microphone to hear you. A box will open. Swipe right to Allow, then double tap.',
+  permissionsDone: 'Thank you. All set.',
 };
 
 let installed: Set<string> | null = null;
