@@ -187,11 +187,26 @@ dismiss_dialogs
 adb logcat -c
 adb logcat -v time -s ReactNativeJS:V AndroidRuntime:E > "$JSLOG" 2>/dev/null &
 LOGCAT_PID=$!
+# Everything (crash buffer included), streamed, so a crash is on file even if the job is cut off.
+adb logcat -v time -b main,system,crash > "$OUT/logcat-live.txt" 2>/dev/null &
+LIVE_PID=$!
+# The first launch failed: keep the logs and stop now (the later steps all need it).
+stop_early() {
+  log "stopping early: $1"
+  adb shell pidof $PKG >/dev/null || log "app process is gone"
+  adb logcat -d -b crash > "$OUT/logcat-crash.txt" 2>/dev/null
+  cat "$OUT/logcat-crash.txt"
+  kill $LOGCAT_PID $LIVE_PID 2>/dev/null || true
+  grep -E 'ActivityManager.*(com.sgfhnn.birr|Process .* died)|FATAL|libc.*Fatal|AndroidRuntime' "$OUT/logcat-live.txt" | tail -40
+  log "E2E FAILED"
+  exit 1
+}
 
 # ---- 1. first launch: the language question, then the greeting
 log "launch"
 adb shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null
 if wait_js '\[birr\] screen: choose a language' 90 1; then log "language question shown"; else fail "first launch did not ask for the language"; fi
+adb shell pidof $PKG >/dev/null || { fail "app died on the language screen"; stop_early "app died on the language screen"; }
 sleep 4
 dismiss_dialogs
 shot 01-language
@@ -213,7 +228,7 @@ adb shell dumpsys package $PKG | grep -E 'android.permission.(CAMERA|RECORD_AUDI
 grep -q 'CAMERA: granted=true' "$OUT/permissions.txt" || fail "CAMERA not granted after the dialog"
 grep -q 'RECORD_AUDIO: granted=true' "$OUT/permissions.txt" || fail "RECORD_AUDIO not granted after the dialog"
 if wait_js '\[birr\] screen: Thank you. All set.' 60 "$SINCE"; then log "thanked"; else fail "no 'Thank you. All set.' after both permissions"; fi
-if wait_js "\[birr\] screen: Hi, I'm Birr" 90 "$SINCE"; then log "greeted"; else fail "no greeting after choosing English"; fi
+if wait_js "\[birr\] screen: Hi, I'm Birr" 90 "$SINCE"; then log "greeted"; else fail "no greeting after choosing English"; stop_early "no greeting"; fi
 THANKED_AT=$(tail -n +"$SINCE" "$JSLOG" | grep -n 'screen: Thank you. All set.' | head -1 | cut -d: -f1)
 HI_AT=$(tail -n +"$SINCE" "$JSLOG" | grep -n "screen: Hi, I'm Birr" | head -1 | cut -d: -f1)
 [ -n "$THANKED_AT" ] && [ -n "$HI_AT" ] && [ "$HI_AT" -lt "$THANKED_AT" ] && fail "greeting came before 'Thank you. All set.'"
@@ -396,7 +411,7 @@ adb shell pidof $PKG >/dev/null || fail "app died during the test"
 log "end (UTC): $(date -u +%FT%TZ)"
 
 adb logcat -d > "$OUT/logcat-full.txt"
-kill $LOGCAT_PID 2>/dev/null || true
+kill $LOGCAT_PID $LIVE_PID 2>/dev/null || true
 echo "---- ReactNativeJS"
 cat "$OUT/logcat-js.txt"
 if grep -qE 'E/ReactNativeJS|Unhandled promise rejection|Invariant Violation' "$OUT/logcat-js.txt"; then
