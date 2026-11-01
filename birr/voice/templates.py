@@ -62,6 +62,10 @@ AM = {
         "holdStill": "ሳያንቀሳቅሱ ይያዙ፣ እየቆጠርኩ ነው።",
         "thinking": "አንድ ጊዜ።",
         "languageChosen": "እሺ፣ ከአሁን ጀምሮ በአማርኛ እናገራለሁ።",
+        # Not yet checked by a native speaker (Anu to review).
+        "permissionsIntro": "ገንዘብዎን ለማየት ካሜራው፣ እርስዎን ለመስማት ደግሞ ማይክሮፎኑ ያስፈልገኛል። አሁን አንድ ሳጥን"
+        " ይከፈታል። ፍቀድ የሚለውን ለማግኘት ወደ ቀኝ ያንሸራትቱ፣ ከዚያ ሁለቴ ይንኩ።",
+        "permissionsDone": "አመሰግናለሁ። ሁሉም ዝግጁ ነው።",
     },
     # You have 350 birr: one 200, one 100 and one 50.
     "total": "በአጠቃላይ {amount} ብር አለዎት፦ {notes}።",
@@ -161,6 +165,11 @@ OM = {
         "holdStill": "Tasgabbaa'ii qabadhu, lakkaa'aan jira.",
         "thinking": "Xiqqoo eegi.",
         "languageChosen": "Tole, amma Afaan Oromootiin nan dubbadha.",
+        # Not yet checked by a native speaker (Oromo is not offered in the app yet).
+        "permissionsIntro": "Maallaqa kee arguuf kaameraa, si dhaggeeffachuuf immoo maaykiroofoonii"
+        " nan barbaada. Saanduqni tokko ni banama. Hayyami argachuuf gara mirgaatti harkisi, achii"
+        " lama tuqi.",
+        "permissionsDone": "Galatoomi. Hundi qophaa'eera.",
     },
     # Oromo keeps the total only; the note-by-note list waits for a native speaker's wording.
     "total": "Waliigala qarshii {amount} qabda.",

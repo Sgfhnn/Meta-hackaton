@@ -153,6 +153,13 @@ APP_PHRASES = {
     "thinking": "One moment.",
     # Said in the chosen language right after the user picks it (the app's language list).
     "languageChosen": "Okay, I will speak this language now.",
+    # First launch, after the language: what the two permission dialogs are for and how to
+    # answer them with TalkBack. Then, when both were allowed, a thank-you before the greeting.
+    "permissionsIntro": (
+        "I need the camera to see your money and the microphone to hear you. A box will open. "
+        "Swipe right to Allow, then double tap."
+    ),
+    "permissionsDone": "Thank you. All set.",
 }
 
 
