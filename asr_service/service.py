@@ -1,5 +1,9 @@
 """Local ASR service for Birr: Omnilingual ASR 300M on CPU. Bind to 127.0.0.1 only."""
-import io, os, tempfile, time
+import io
+import os
+import tempfile
+import time
+
 import av
 import numpy as np
 import soundfile as sf
@@ -10,7 +14,7 @@ MODEL = os.environ.get("ASR_MODEL", "omniASR_CTC_300M_v2")
 LANGS = {"amh_Ethi", "orm_Latn", "eng_Latn"}
 MAX_S = 30.0
 torch.set_num_threads(int(os.environ.get("ASR_THREADS", "4")))
-from omnilingual_asr.models.inference.pipeline import ASRInferencePipeline
+from omnilingual_asr.models.inference.pipeline import ASRInferencePipeline  # noqa: E402
 
 pipe = ASRInferencePipeline(model_card=MODEL, device="cpu", dtype=torch.float32)
 app = FastAPI()
@@ -29,7 +33,7 @@ def decode16k(raw: bytes) -> np.ndarray:
             for o in rs.resample(None):
                 chunks.append(o.to_ndarray().reshape(-1))
     except Exception as e:
-        raise HTTPException(400, f"unreadable audio: {type(e).__name__}")
+        raise HTTPException(400, f"unreadable audio: {type(e).__name__}") from None
     if not chunks:
         raise HTTPException(400, "no audio")
     return np.concatenate(chunks).astype(np.float32) / 32768.0
@@ -57,5 +61,5 @@ async def transcribe(request: Request, lang: str = "eng_Latn"):
             out = pipe.transcribe([f.name], lang=[lang], batch_size=1)
         text = out[0]
     except Exception as e:
-        raise HTTPException(500, f"model error: {type(e).__name__}")
+        raise HTTPException(500, f"model error: {type(e).__name__}") from None
     return {"text": text, "lang": lang, "ms": int((time.time() - t0) * 1000)}
