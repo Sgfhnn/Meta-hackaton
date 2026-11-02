@@ -1,4 +1,5 @@
 """Local ASR service for Birr: Omnilingual ASR 300M on CPU. Bind to 127.0.0.1 only."""
+
 import io
 import os
 import tempfile
