@@ -4,7 +4,6 @@
 // until the job is done. A backend that answers POST with 200 and the result directly (the older
 // synchronous /scan, or wait=true) is handled too.
 
-import { File, UploadType } from 'expo-file-system';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 
@@ -15,6 +14,12 @@ import type { JobStarted, JobStatus, ScanError, ScanRequest, ScanResponse } from
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/+$/, '');
 
 export const usingMock = API_URL === '' || API_URL === 'mock';
+
+// Optional backup counting backend (the Vercel function, which never sleeps). The box (API_URL) is
+// tried first, because only it makes the Amharic voice clips; when the box is asleep or down the
+// photo goes to SCAN_URL with wait=true (no job to poll; the answer is then spoken by the phone).
+export const SCAN_URL = (process.env.EXPO_PUBLIC_SCAN_URL ?? '').replace(/\/+$/, '') || API_URL;
+const scanWaits = SCAN_URL !== API_URL;
 
 const DEFAULT_POLL_MS = 1500;
 
@@ -54,24 +59,71 @@ function formFields(req: ScanRequest): Record<string, string> {
   return fields;
 }
 
-async function upload(photoUri: string, req: ScanRequest, signal: AbortSignal) {
-  if (Platform.OS === 'web') {
-    // expo-file-system has no web support; the web preview posts a Blob instead.
-    const form = new FormData();
-    form.append('image', await (await fetch(photoUri)).blob(), 'scan.jpg');
-    for (const [k, v] of Object.entries(formFields(req))) form.append(k, v);
-    const res = await fetch(`${API_URL}/scan`, { method: 'POST', body: form, signal });
-    return { status: res.status, text: await res.text() };
-  }
-  const res = await new File(photoUri).upload(`${API_URL}/scan`, {
-    uploadType: UploadType.MULTIPART,
-    fieldName: 'image',
-    mimeType: 'image/jpeg',
-    parameters: formFields(req),
-    sessionType: 'foreground',
-    signal,
+/**
+ * POST a multipart form with XMLHttpRequest. On a phone, React Native's own networking sends file
+ * parts given as { uri, name, type }. Not fetch: Expo SDK 58 replaces the global fetch with
+ * expo/fetch, which rejects those parts ("Unsupported FormDataPart implementation"), and
+ * expo-file-system's File.upload never reached the server in the release APK either.
+ */
+export function postForm(url: string, form: FormData, signal: AbortSignal): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const onAbort = () => xhr.abort();
+    xhr.open('POST', url);
+    xhr.onload = () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve({ status: xhr.status, text: xhr.responseText });
+    };
+    xhr.onerror = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(new Error(`network error posting to ${url}`));
+    };
+    xhr.onabort = () => reject(new Error('aborted'));
+    if (signal.aborted) {
+      reject(new Error('aborted'));
+      return;
+    }
+    signal.addEventListener('abort', onAbort);
+    xhr.send(form);
   });
-  return { status: res.status, text: res.body };
+}
+
+/** A file on the phone as a form part (web: the blob itself). */
+export async function filePart(uri: string, name: string, type: string): Promise<Blob> {
+  if (Platform.OS === 'web') return await (await fetch(uri)).blob();
+  return { uri, name, type } as unknown as Blob;
+}
+
+async function uploadTo(base: string, wait: boolean, photoUri: string, req: ScanRequest, signal: AbortSignal) {
+  const form = new FormData();
+  form.append('image', await filePart(photoUri, 'scan.jpg', 'image/jpeg'), 'scan.jpg');
+  for (const [k, v] of Object.entries(formFields(req))) form.append(k, v);
+  if (wait) form.append('wait', 'true');
+  return postForm(`${base}/scan`, form, signal);
+}
+
+function isJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Box first; the backup when the box does not answer (asleep: 409, gateway errors, no JSON, no network). */
+async function upload(photoUri: string, req: ScanRequest, signal: AbortSignal) {
+  if (!scanWaits) return uploadTo(API_URL, false, photoUri, req, signal);
+  try {
+    const r = await uploadTo(API_URL, false, photoUri, req, signal);
+    const boxUp = (r.status === 200 || r.status === 202 || (r.status < 500 && r.status !== 404 && r.status !== 409)) && isJson(r.text);
+    if (boxUp) return r;
+    console.warn(`[birr] box scan answered ${r.status}, counting on the backup`);
+  } catch (e) {
+    if (signal.aborted) throw e;
+    console.warn('[birr] box unreachable, counting on the backup', e);
+  }
+  return uploadTo(SCAN_URL, true, photoUri, req, signal);
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -95,6 +147,7 @@ export async function scan(photoUri: string, req: ScanRequest, timeoutMs: number
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const started = await upload(photoUri, req, controller.signal);
+    console.log(`[birr] POST /scan -> ${started.status}`);
     const body = JSON.parse(started.text);
     if (started.status === 200) return { kind: 'ok', body: body as ScanResponse };
     if (started.status !== 202) return { kind: 'error', body: body as ScanError };
@@ -107,6 +160,7 @@ export async function scan(photoUri: string, req: ScanRequest, timeoutMs: number
         signal: controller.signal,
       });
       const status = (await res.json()) as JobStatus & ScanError;
+      console.log(`[birr] GET /scan/${job.job_id} -> ${res.status} ${status.status}`);
       if (res.status !== 200) return { kind: 'error', body: status };
       if (status.status === 'done' && status.result) return { kind: 'ok', body: status.result };
       if (status.status === 'error') {
@@ -115,7 +169,8 @@ export async function scan(photoUri: string, req: ScanRequest, timeoutMs: number
       }
       wait = status.poll_after_ms ?? DEFAULT_POLL_MS;
     }
-  } catch {
+  } catch (e) {
+    console.warn('[birr] scan failed', controller.signal.aborted ? '(timeout)' : '', e);
     return controller.signal.aborted ? { kind: 'timeout' } : { kind: 'network' };
   } finally {
     clearTimeout(timer);

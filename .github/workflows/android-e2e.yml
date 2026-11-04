@@ -1,0 +1,96 @@
+name: Android E2E
+
+# Runs the release APK on an x86_64 emulator against the live backend (.github/e2e/run-e2e.sh).
+# Called by android-apk.yml after each build (same run, artifact birr-apk). A push that changes
+# only the test, or a manual run, tests the newest successful "Android APK" build of the branch
+# (or the run id given).
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      apk_run_id:
+        description: Run id of an "Android APK" run whose birr-apk artifact to test (empty = newest birr-apk artifact of the branch)
+        required: false
+  push:
+    branches: [hark/android-apk]
+    paths:
+      - .github/e2e/**
+      - .github/workflows/android-e2e.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APK (this run)
+        if: ${{ github.workflow == 'Android APK' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: birr-apk
+          path: apk
+
+      - name: Find the APK build to test
+        id: pick
+        if: ${{ github.workflow != 'Android APK' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.apk_run_id }}
+        run: |
+          if [ -z "$RUN_ID" ]; then
+            # the newest birr-apk artifact built from this branch
+            RUN_ID=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=birr-apk&per_page=50" \
+              --jq '[.artifacts[] | select(.expired | not) | select(.workflow_run.head_branch == "${{ github.ref_name }}")][0].workflow_run.id')
+          fi
+          echo "Testing the APK from run $RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download APK (earlier run)
+        if: ${{ github.workflow != 'Android APK' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: birr-apk
+          path: apk
+          run-id: ${{ steps.pick.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: APK
+        run: |
+          ls -la apk
+          sha256sum apk/birr.apk
+          unzip -l apk/birr.apk | grep -E 'lib/.*/libreactnative|lib/x86_64' | head -5
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 4
+          ram-size: 4096M
+          disable-animations: true
+          # -camera-back emulated: a simple virtual camera that works without a window.
+          # Audio stays on (no -noaudio) so the microphone can record.
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -camera-back emulated -camera-front none
+          script: bash .github/e2e/run-e2e.sh apk/birr.apk
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: birr-e2e
+          path: e2e-out
+          if-no-files-found: warn
+          retention-days: 14

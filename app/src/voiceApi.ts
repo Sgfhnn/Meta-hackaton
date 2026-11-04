@@ -3,11 +3,9 @@
 //   GET  /phrases  the app's own prompts in Amharic or Oromo, with clips kept on the phone
 //   GET  /health   whether the backend answers in Amharic and Oromo
 
-import { Directory, File, Paths, UploadType } from 'expo-file-system';
-import { Platform } from 'react-native';
-
 import { mockIntent } from './mock';
-import { API_URL, usingMock } from './scan';
+import { cacheClip } from './voice';
+import { API_URL, filePart, postForm, usingMock } from './scan';
 import type { IntentResponse, Lang, Phrases, ScanError } from './types';
 
 export type IntentOutcome =
@@ -22,84 +20,94 @@ export async function askIntent(audioUri: string, lang: Lang, timeoutMs: number)
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    let status: number;
-    let text: string;
-    if (Platform.OS === 'web') {
-      // Browsers record WebM; the backend accepts it.
-      const blob = await (await fetch(audioUri)).blob();
-      const form = new FormData();
-      form.append('audio', blob, blob.type.includes('webm') ? 'question.webm' : 'question.m4a');
-      form.append('lang', lang);
-      const res = await fetch(`${API_URL}/intent`, { method: 'POST', body: form, signal: controller.signal });
-      status = res.status;
-      text = await res.text();
-    } else {
-      const res = await new File(audioUri).upload(`${API_URL}/intent`, {
-        uploadType: UploadType.MULTIPART,
-        fieldName: 'audio',
-        mimeType: 'audio/mp4', // AAC in .m4a (RecordingPresets.HIGH_QUALITY)
-        parameters: { lang },
-        sessionType: 'foreground',
-        signal: controller.signal,
-      });
-      status = res.status;
-      text = res.body;
-    }
+    const form = new FormData();
+    // Phones record AAC in .m4a (RecordingPresets.HIGH_QUALITY); browsers record WebM. The backend takes both.
+    const part = await filePart(audioUri, 'question.m4a', 'audio/mp4');
+    form.append('audio', part, part.type?.includes('webm') ? 'question.webm' : 'question.m4a');
+    form.append('lang', lang);
+    const { status, text } = await postForm(`${API_URL}/intent`, form, controller.signal);
+    console.log(`[birr] POST /intent lang=${lang} -> ${status}`);
     const body = JSON.parse(text);
     return status === 200 ? { kind: 'ok', body: body as IntentResponse } : { kind: 'error', body: body as ScanError };
-  } catch {
+  } catch (e) {
+    console.warn('[birr] intent failed', controller.signal.aborted ? '(timeout)' : '', e);
     return controller.signal.aborted ? { kind: 'timeout' } : { kind: 'network' };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** True when the backend answers in Amharic and Oromo, so those languages are worth offering. */
-export async function backendTranslates(): Promise<boolean> {
+/**
+ * True when the backend answers in Amharic and Oromo, so those languages are worth offering.
+ * Tries a few times: right after the app opens the network is sometimes not up yet.
+ */
+export async function backendTranslates(tries = 3): Promise<boolean> {
   if (usingMock) return false;
-  try {
-    const res = await fetch(`${API_URL}/health`);
-    const body = (await res.json()) as { voice?: { translates?: boolean; gemini?: boolean } };
-    // `translates` (templates, always on); older backends only said `gemini`.
-    return body.voice?.translates === true || body.voice?.gemini === true;
-  } catch {
-    return false;
+  for (let i = 1; i <= tries; i++) {
+    try {
+      const res = await fetch(`${API_URL}/health`);
+      const body = (await res.json()) as { voice?: { translates?: boolean; gemini?: boolean } };
+      // `translates` (templates, always on); older backends only said `gemini`.
+      return body.voice?.translates === true || body.voice?.gemini === true;
+    } catch (e) {
+      console.warn(`[birr] health check failed (try ${i} of ${tries})`, e);
+      if (i < tries) await new Promise((r) => setTimeout(r, 3000));
+    }
   }
+  return false;
 }
 
 /**
- * The app's prompts in `lang`. Clip links come back as full URLs, or as local files once
- * downloaded, so "I cannot reach the server" still plays when the network is down.
+ * The app's prompts in `lang`. Resolves as soon as the texts arrive, with clip links to the
+ * server; the clips then download one by one in the background (voice.ts cacheClip) and each
+ * link becomes a local file once it is there, so "I cannot reach the server" still plays when
+ * the network is down later. One request per language at a time (the language screen and the
+ * chosen language used to fetch, and write, the same files at once).
  */
-export async function fetchPhrases(lang: Lang): Promise<Phrases> {
-  if (usingMock || lang === 'en') return {};
+const phraseRequests: Partial<Record<Lang, Promise<Phrases>>> = {};
+
+export function fetchPhrases(lang: Lang): Promise<Phrases> {
+  if (usingMock || lang === 'en') return Promise.resolve({});
+  const running = phraseRequests[lang];
+  if (running) return running;
+  const request = loadPhrases(lang);
+  phraseRequests[lang] = request;
+  request.then((p) => {
+    // Keep a good answer for this launch; ask again next time only if it failed.
+    if (Object.keys(p).length === 0 && phraseRequests[lang] === request) delete phraseRequests[lang];
+  });
+  return request;
+}
+
+async function loadPhrases(lang: Lang): Promise<Phrases> {
   let phrases: Phrases;
   try {
     const res = await fetch(`${API_URL}/phrases?lang=${lang}`);
     if (!res.ok) return {};
     phrases = ((await res.json()) as { phrases?: Phrases }).phrases ?? {};
-  } catch {
+  } catch (e) {
+    console.warn('[birr] phrases fetch failed', e);
     return {};
   }
-  const dir = Platform.OS === 'web' ? null : new Directory(Paths.cache, 'phrases');
-  try {
-    dir?.create({ intermediates: true, idempotent: true });
-  } catch {
-    // no cache folder: play the clips from the server instead
-  }
   for (const phrase of Object.values(phrases)) {
-    if (!phrase?.audio) continue;
-    const remote = `${API_URL}${phrase.audio}`;
-    phrase.audio = remote;
-    if (!dir) continue;
-    // The clip id changes whenever the text or voice changes, so a kept file never goes stale.
-    const file = new File(dir, `${phrase.audio.split('/').pop()}.wav`);
-    try {
-      if (!file.exists) await File.downloadFileAsync(remote, file, { idempotent: true });
-      phrase.audio = file.uri;
-    } catch {
-      // keep the server link
-    }
+    if (phrase?.audio?.startsWith('/')) phrase.audio = `${API_URL}${phrase.audio}`;
   }
+  void (async () => {
+    // The ones said first go first.
+    const order = ['chooseLanguage', 'languageChosen', 'greeting', 'listening', 'heardFailed', 'noNetwork'];
+    const entries = Object.entries(phrases).sort(
+      ([a], [b]) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99),
+    );
+    let saved = 0;
+    for (const [, phrase] of entries) {
+      if (!phrase?.audio || !/^https?:/.test(phrase.audio)) continue;
+      const local = await cacheClip(phrase.audio, 60_000);
+      if (local.startsWith('file:')) {
+        phrase.audio = local;
+        saved += 1;
+      }
+    }
+    console.log(`[birr] phrases ${lang}: ${saved} clips on the phone`);
+  })();
   return phrases;
 }

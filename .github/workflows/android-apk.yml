@@ -1,0 +1,94 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: Backend URL baked into the app (EXPO_PUBLIC_API_URL)
+        required: false
+        default: https://8000-agqxcw5dkplvg7dqced4iplppi.instabox.tech
+      scan_url:
+        description: Optional separate counting backend (EXPO_PUBLIC_SCAN_URL); empty = api_url
+        required: false
+        default: ''
+  push:
+    branches: [hark/android-apk]
+    paths:
+      - app/**
+      - .github/workflows/android-apk.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: app
+    env:
+      EXPO_PUBLIC_API_URL: ${{ inputs.api_url || 'https://8000-agqxcw5dkplvg7dqced4iplppi.instabox.tech' }}
+      EXPO_PUBLIC_SCAN_URL: ${{ inputs.scan_url || '' }}
+      NODE_ENV: production
+      EXPO_NO_TELEMETRY: 1
+      CI: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install JS deps
+        run: npm ci --include=dev
+
+      - name: Expo prebuild (android)
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Build release APK (JS bundle embedded, debug keystore)
+        working-directory: app/android
+        run: |
+          echo "Baking EXPO_PUBLIC_API_URL=$EXPO_PUBLIC_API_URL"
+          # x86_64 too, so the same APK runs on the CI emulator (android-e2e.yml) as on phones.
+          # A private repo's runner has 7 GB: a 6 GB Gradle heap plus the Kotlin daemon and native
+          # builds got the runner killed in R8 ("runner has received a shutdown signal").
+          ./gradlew assembleRelease --no-daemon --max-workers=2 \
+            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64 \
+            -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m" \
+            -Pkotlin.daemon.jvmargs="-Xmx1536m"
+
+      - name: Verify bundle and rename
+        working-directory: app/android/app/build/outputs/apk/release
+        run: |
+          ls -la
+          APK=$(ls *.apk | head -1)
+          unzip -l "$APK" | grep assets/index.android.bundle
+          unzip -p "$APK" assets/index.android.bundle | grep -a -c "$EXPO_PUBLIC_API_URL" || (echo "API URL not in bundle" && exit 1)
+          mv "$APK" birr.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: birr-apk
+          path: app/android/app/build/outputs/apk/release/birr.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # Install this exact APK on an emulator and run the scan and voice round trips against the backend.
+  e2e:
+    needs: build
+    uses: ./.github/workflows/android-e2e.yml

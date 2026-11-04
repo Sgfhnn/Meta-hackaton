@@ -6,6 +6,7 @@ Run: uv run uvicorn birr.api:app --reload
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -19,6 +20,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from birr import frame as framing
 from birr import scan as scan_flow
 from birr.agent.trace import new_trace_id, write_trace
 from birr.config import get_settings
@@ -26,7 +28,7 @@ from birr.image import BadImage, prepare_jpeg
 from birr.jobs import JobStore
 from birr.read import muse
 from birr.scan import ScanRequest
-from birr.voice import asr, gemini, mms, understand
+from birr.voice import asr, assist, gemini, mms, understand
 from birr.voice import speech as say
 from birr.voice.service import LANGS, TRANSLATED, Voice
 
@@ -49,10 +51,13 @@ async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient(timeout=settings.scan_deadline_s)
     app.state.jobs = JobStore()
     app.state.voice = Voice(settings)
+    app.state.sessions = assist.Sessions()
     warm = asyncio.create_task(_warm(app.state.voice))
+    asr_warm = asyncio.create_task(asr.keep_warm(app.state.http, settings))
     yield
     warm.cancel()
-    await asyncio.gather(warm, return_exceptions=True)
+    asr_warm.cancel()
+    await asyncio.gather(warm, asr_warm, return_exceptions=True)
     await app.state.jobs.close()
     await app.state.http.aclose()
 
@@ -196,15 +201,20 @@ async def scan_status(job_id: str):
 @app.post("/intent")
 async def intent(
     audio: Annotated[UploadFile, File()],
-    lang: Annotated[str, Form()] = "en",
+    lang: Annotated[str | None, Form()] = None,
 ):
     """A spoken question -> what to do next (docs/api.md section 1). Meta Omnilingual ASR hears
     it and Muse turns the transcript into the intent (Gemini only when ASR_URL is not set).
-    Neither the audio nor the transcript is kept."""
+    Neither the audio nor the transcript is kept.
+
+    The answer is in the language the app asked for: the user chose it, and a model's guess at
+    the language of a few words (often wrong for short Amharic clips) must not switch it. Only
+    a request without `lang` is answered in the language that was heard."""
     settings = get_settings()
     voice: Voice = app.state.voice
     trace_id = new_trace_id()
-    hint = lang if lang in LANGS else "en"
+    chosen = lang if lang in LANGS else None
+    hint = chosen or "en"
     trace: dict = {"endpoint": "/intent", "inputs": {"lang": hint}}
     started = time.perf_counter()
 
@@ -241,7 +251,7 @@ async def intent(
     except (asr.AsrError, understand.UnderstandError, gemini.GeminiError) as exc:
         return fail(502, "upstream_error", say.NOT_HEARD, str(exc))
 
-    spoken_lang = heard["lang"] or hint
+    spoken_lang = chosen or heard["lang"] or "en"
     kind, paid, price = heard["intent"], heard["paid"], heard["price"]
     # next: "scan" = start a scan with this intent; "ask" = speak, then record again;
     # "done" = nothing to scan (paid exactly the price).
@@ -264,18 +274,200 @@ async def intent(
         speech = {"speech": {"en": text}}
     timing["total"] = int((time.perf_counter() - started) * 1000)
     trace.update(
-        outcome=kind, next=step, lang=spoken_lang, paid=paid, price=price, speech_en=text,
-        timing_ms=timing,
+        outcome=kind, next=step, lang=spoken_lang, heard_lang=heard["lang"], paid=paid,
+        price=price, speech_en=text, timing_ms=timing,
     )  # fmt: skip
     write_trace(settings.trace_dir, trace_id, trace)
     return {
         "intent": kind,
         "next": step,
         "lang": spoken_lang,
+        "heard_lang": heard["lang"],
         "paid": paid,
         "price": price,
         **speech,
         "trace_id": trace_id,
+    }
+
+
+MAX_TEXT = 500
+MAX_FRAME_BYTES = 1024 * 1024
+
+
+def _client_audio_log(raw: str | None) -> list[str]:
+    """The app's last few clip outcomes ('clip started 240 ms', 'clip error ...'), kept in the
+    trace only, so a real phone that plays no clips can be diagnosed without its logcat."""
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return []
+    log = data.get("audio_log") if isinstance(data, dict) else None
+    if not isinstance(log, list):
+        return []
+    return [str(line)[:160] for line in log[-8:] if isinstance(line, str)]
+
+
+@app.post("/assist")
+async def assist_turn(
+    audio: Annotated[UploadFile | None, File()] = None,
+    text: Annotated[str | None, Form()] = None,
+    lang: Annotated[str, Form()] = "en",
+    session_id: Annotated[str | None, Form()] = None,
+    state: Annotated[str | None, Form()] = None,
+):
+    """One turn of the voice assistant (docs/api.md section 7). Meta Omnilingual ASR hears the
+    user, Muse Spark Open decides the action and words, code checks both and speaks the answer
+    (MMS for Amharic). Neither the audio nor the words are stored; the last few turns stay in
+    memory for 30 minutes so the conversation can continue."""
+    settings = get_settings()
+    voice: Voice = app.state.voice
+    trace_id = new_trace_id()
+    lang = lang if lang in assist.LANGS else "en"
+    sid = (session_id or "")[:64] or None
+    st = assist.State.parse(state)
+    trace: dict = {"endpoint": "/assist", "inputs": {"lang": lang, "session": bool(sid)}}
+    if playback := _client_audio_log(state):
+        trace["inputs"]["client_audio"] = playback
+    started = time.perf_counter()
+    timing: dict = {}
+
+    def ms(since: float) -> int:
+        return int((time.perf_counter() - since) * 1000)
+
+    def fail(status: int, error: str, said: str, detail: str):
+        trace.update(outcome=error, detail=detail, speech_en=said)
+        trace["timing_ms"] = {**timing, "total": ms(started)}
+        write_trace(settings.trace_dir, trace_id, trace)
+        return _error(status, error, said, lang, trace_id)
+
+    heard = (text or "").strip()[:MAX_TEXT]
+    engine = "text" if heard else hears(settings)
+    gemini_heard = None
+    if not heard:
+        if audio is None:
+            return fail(400, "bad_request", say.BAD_AUDIO, "neither audio nor text")
+        if engine == "off":
+            return fail(501, "not_implemented", say.VOICE_TODO, "no ASR_URL or GEMINI_API_KEY")
+        raw = await audio.read(settings.max_audio_bytes + 1)
+        mime = gemini.audio_mime(audio.filename, audio.content_type)
+        trace["inputs"].update(audio_bytes=len(raw), mime=mime)
+        if not raw or len(raw) > settings.max_audio_bytes or mime is None:
+            return fail(400, "bad_request", say.BAD_AUDIO, "audio missing, too large or not audio")
+        t = time.perf_counter()
+        try:
+            if engine == "omnilingual":
+                heard = (await asr.transcribe(app.state.http, raw, mime, lang, settings))[:MAX_TEXT]
+            else:
+                gemini_heard = await gemini.understand(app.state.http, raw, mime, settings)
+        except asr.AsrError as exc:
+            if not settings.gemini_key:
+                return fail(502, "upstream_error", say.NOT_HEARD, str(exc))
+            trace["asr_error"] = str(exc)
+            try:
+                engine = "gemini"
+                gemini_heard = await gemini.understand(app.state.http, raw, mime, settings)
+            except gemini.GeminiError as exc2:
+                return fail(502, "upstream_error", say.NOT_HEARD, str(exc2))
+        except gemini.GeminiError as exc:
+            return fail(502, "upstream_error", say.NOT_HEARD, str(exc))
+        timing["asr"] = ms(t)
+    trace["engine"] = engine
+    trace["heard_chars"] = len(heard)  # never the words themselves
+
+    t = time.perf_counter()
+    decided_by = "muse"
+    if gemini_heard is not None:  # fallback: Gemini heard the audio directly
+        decided_by = "gemini"
+        kind = gemini_heard["intent"]
+        decision = {
+            "action": {"count": "scan", "change": "change"}.get(kind, "none"), "lang": lang,
+            "paid": gemini_heard["paid"], "price": gemini_heard["price"], "needs": None,
+            "reply_en": "", "reply_am": "",
+        }  # fmt: skip
+    elif not heard:
+        decision = None
+    elif st.camera_open and (command := assist.camera_command(heard)):
+        decided_by = "code"  # "take it" / "stop" while the camera is open: no model call
+        decision = {
+            "action": command, "lang": lang, "paid": None, "price": None, "needs": None,
+            "reply_en": "", "reply_am": "",
+        }  # fmt: skip
+    else:
+        history = app.state.sessions.history(sid)
+        try:
+            decision = await assist.decide(app.state.http, heard, lang, st, history, settings)
+        except assist.AssistError as exc:
+            log.warning("assist: Muse failed, using keywords: %s", exc)
+            trace["muse_error"] = str(exc)
+            decided_by = "keywords"
+            decision = assist.keywords(heard, lang)
+    timing["muse"] = ms(t)
+
+    if decision is None:  # the recogniser heard nothing
+        turn = assist.Turn("none", lang, needs="ask", text=say.NOT_HEARD)
+        decided_by = "none"
+    else:
+        turn = assist.resolve(decision, heard, lang, st)
+        trace["model_action"] = decision["action"]
+
+    t = time.perf_counter()
+    try:
+        if turn.free_en is not None:
+            spoken = await voice.free(turn.free_en, turn.lang, turn.free_am)
+        else:
+            spoken = await voice.localize(turn.text, turn.lang)
+    except Exception:  # noqa: BLE001 - the decision stands; say it in English
+        log.exception("could not voice an assist answer")
+        spoken = {"speech": {"en": turn.free_en or turn.text}}
+    timing["tts"] = ms(t)
+    said_en = spoken["speech"].get("en", "")
+    if heard and decision is not None:
+        app.state.sessions.add(sid, heard, f"[{turn.action}] {said_en}")
+    timing["total"] = ms(started)
+    trace.update(
+        outcome=turn.action, decided_by=decided_by, lang=turn.lang, paid=turn.paid,
+        price=turn.price, needs=turn.needs, free_reply=turn.free_en is not None,
+        speech_en=said_en, timing_ms=timing,
+    )  # fmt: skip
+    write_trace(settings.trace_dir, trace_id, trace)
+    return {
+        "action": turn.action,
+        "intent": turn.intent,
+        "lang": turn.lang,
+        "paid": turn.paid,
+        "price": turn.price,
+        "needs": turn.needs,
+        "heard": bool(heard) or gemini_heard is not None,
+        "decided_by": decided_by,
+        **spoken,
+        "trace_id": trace_id,
+        "timing_ms": timing,
+    }
+
+
+@app.post("/frame")
+async def frame(
+    image: Annotated[UploadFile, File()],
+    lang: Annotated[str, Form()] = "en",
+):
+    """Live camera guidance (docs/api.md section 8): is this small frame good enough to count?
+    Image statistics only, no model and no network, a few milliseconds. Nothing is stored."""
+    lang = lang if lang in LANGS else "en"
+    started = time.perf_counter()
+    raw = await image.read(MAX_FRAME_BYTES + 1)
+    if not raw or len(raw) > MAX_FRAME_BYTES:
+        return _error(400, "bad_request", say.BAD_REQUEST, lang)
+    try:
+        result = await asyncio.to_thread(framing.check, raw)
+    except framing.BadFrame:
+        return _error(400, "bad_request", say.BAD_REQUEST, lang)
+    key = f"cut_off:{result.side}" if result.status == "cut_off" else result.status
+    return {
+        "status": result.status,
+        "side": result.side,
+        "ready": result.ready,
+        **_speech(say.FRAME[key], lang),
+        "ms": int((time.perf_counter() - started) * 1000),
     }
 
 
@@ -325,5 +517,7 @@ async def health():
             "translates": True,
             "tts": voice.tts,
             "speaks": [lang for lang in TRANSLATED if voice.speaks(lang)],
+            "assist": hears(settings) != "off",
         },
+        "frame": True,
     }
