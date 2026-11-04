@@ -15,8 +15,9 @@ export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/+$/, '
 
 export const usingMock = API_URL === '' || API_URL === 'mock';
 
-// Optional separate counting backend (the Vercel function, which never sleeps). It answers with
-// wait=true, so there is no job to poll. Voice, guidance and clips stay on API_URL.
+// Optional backup counting backend (the Vercel function, which never sleeps). The box (API_URL) is
+// tried first, because only it makes the Amharic voice clips; when the box is asleep or down the
+// photo goes to SCAN_URL with wait=true (no job to poll; the answer is then spoken by the phone).
 export const SCAN_URL = (process.env.EXPO_PUBLIC_SCAN_URL ?? '').replace(/\/+$/, '') || API_URL;
 const scanWaits = SCAN_URL !== API_URL;
 
@@ -93,12 +94,36 @@ export async function filePart(uri: string, name: string, type: string): Promise
   return { uri, name, type } as unknown as Blob;
 }
 
-async function upload(photoUri: string, req: ScanRequest, signal: AbortSignal) {
+async function uploadTo(base: string, wait: boolean, photoUri: string, req: ScanRequest, signal: AbortSignal) {
   const form = new FormData();
   form.append('image', await filePart(photoUri, 'scan.jpg', 'image/jpeg'), 'scan.jpg');
   for (const [k, v] of Object.entries(formFields(req))) form.append(k, v);
-  if (scanWaits) form.append('wait', 'true');
-  return postForm(`${SCAN_URL}/scan`, form, signal);
+  if (wait) form.append('wait', 'true');
+  return postForm(`${base}/scan`, form, signal);
+}
+
+function isJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Box first; the backup when the box does not answer (asleep: 409, gateway errors, no JSON, no network). */
+async function upload(photoUri: string, req: ScanRequest, signal: AbortSignal) {
+  if (!scanWaits) return uploadTo(API_URL, false, photoUri, req, signal);
+  try {
+    const r = await uploadTo(API_URL, false, photoUri, req, signal);
+    const boxUp = (r.status === 200 || r.status === 202 || (r.status < 500 && r.status !== 404 && r.status !== 409)) && isJson(r.text);
+    if (boxUp) return r;
+    console.warn(`[birr] box scan answered ${r.status}, counting on the backup`);
+  } catch (e) {
+    if (signal.aborted) throw e;
+    console.warn('[birr] box unreachable, counting on the backup', e);
+  }
+  return uploadTo(SCAN_URL, true, photoUri, req, signal);
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
