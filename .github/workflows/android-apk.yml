@@ -7,6 +7,10 @@ on:
         description: Backend URL baked into the app (EXPO_PUBLIC_API_URL)
         required: false
         default: https://8000-agqxcw5dkplvg7dqced4iplppi.instabox.tech
+      scan_url:
+        description: Optional separate counting backend (EXPO_PUBLIC_SCAN_URL); empty = api_url
+        required: false
+        default: ''
   push:
     branches: [hark/android-apk]
     paths:
@@ -30,6 +34,7 @@ jobs:
         working-directory: app
     env:
       EXPO_PUBLIC_API_URL: ${{ inputs.api_url || 'https://8000-agqxcw5dkplvg7dqced4iplppi.instabox.tech' }}
+      EXPO_PUBLIC_SCAN_URL: ${{ inputs.scan_url || '' }}
       NODE_ENV: production
       EXPO_NO_TELEMETRY: 1
       CI: 1

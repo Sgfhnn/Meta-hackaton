@@ -15,6 +15,11 @@ export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/+$/, '
 
 export const usingMock = API_URL === '' || API_URL === 'mock';
 
+// Optional separate counting backend (the Vercel function, which never sleeps). It answers with
+// wait=true, so there is no job to poll. Voice, guidance and clips stay on API_URL.
+export const SCAN_URL = (process.env.EXPO_PUBLIC_SCAN_URL ?? '').replace(/\/+$/, '') || API_URL;
+const scanWaits = SCAN_URL !== API_URL;
+
 const DEFAULT_POLL_MS = 1500;
 
 /**
@@ -92,7 +97,8 @@ async function upload(photoUri: string, req: ScanRequest, signal: AbortSignal) {
   const form = new FormData();
   form.append('image', await filePart(photoUri, 'scan.jpg', 'image/jpeg'), 'scan.jpg');
   for (const [k, v] of Object.entries(formFields(req))) form.append(k, v);
-  return postForm(`${API_URL}/scan`, form, signal);
+  if (scanWaits) form.append('wait', 'true');
+  return postForm(`${SCAN_URL}/scan`, form, signal);
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
