@@ -11,8 +11,8 @@ Built during the Meta Global AI Developer Hackathon (Oct 26 to Nov 4, 2026).
 | | |
 |---|---|
 | **Web demo, no install** | https://birr-demo.vercel.app — pick a sample pile or upload a photo, in English or Amharic |
-| **Android app** | Built by GitHub Actions (`.github/workflows/android-apk.yml`); download the `birr-apk` artifact from the latest run and sideload it |
-| **Demo video** | 3-minute walkthrough, filmed with the real app (link in the submission) |
+| **Android app** | Download `birr.apk` from the [v1.0-hackathon release](https://github.com/Sgfhnn/Meta-hackaton/releases/tag/v1.0-hackathon) and sideload it (built by `.github/workflows/android-apk.yml`) |
+| **Demo video** | https://youtu.be/3ZomCMt0GbA (3 minutes, filmed with the real app) |
 
 ## Why it matters
 
