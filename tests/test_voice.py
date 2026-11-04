@@ -317,6 +317,92 @@ def test_intent_falls_back_to_the_app_language(voice_client):
 
 
 @pytest.mark.parametrize(
+    "answer, text",
+    [
+        (heard("count", lang="en"), say.COUNT_PROMPT),
+        (heard("change", lang="en", paid=500, price=320), say.change_prompt(500, 320)),
+        (heard("change", lang="om", paid=500), say.NEED_PRICE),
+        (heard("unknown", lang="en"), say.INTENT_UNKNOWN),
+    ],
+)
+def test_intent_answers_in_the_chosen_language(voice_client, answer, text):
+    # The user chose Amharic; a guess that a few words were English (or Oromo) must not switch it.
+    voice_client.state["heard"] = answer
+    body = post_intent(voice_client, lang="am").json()
+    assert body["lang"] == "am"
+    assert body["heard_lang"] == answer["lang"]
+    assert body["speech"] == {"en": text, "am": localize.render(text, "am")[0]}
+    assert body["speech_audio"].startswith("/speak/")
+    assert "speech_todo" not in body
+    trace = json.loads((voice_client.trace_dir / f"{body['trace_id']}.json").read_text())
+    assert trace["lang"] == "am" and trace["heard_lang"] == answer["lang"]
+
+
+def test_intent_english_stays_english(voice_client):
+    voice_client.state["heard"] = heard("count", lang="am")
+    body = post_intent(voice_client, lang="en").json()
+    assert body["lang"] == "en"
+    assert body["speech"] == {"en": say.COUNT_PROMPT}
+    assert "speech_audio" not in body
+
+
+def test_intent_without_lang_uses_the_heard_language(voice_client):
+    voice_client.state["heard"] = heard("count", lang="am")
+    files = {"audio": ("q.m4a", SHORT_M4A, "audio/mp4")}
+    body = voice_client.post("/intent", files=files).json()
+    assert body["lang"] == "am"
+    voice_client.state["heard"] = heard("count", lang=None)
+    assert voice_client.post("/intent", files=files).json()["lang"] == "en"
+
+
+@pytest.fixture
+def asr_client(voice_client, monkeypatch):
+    """voice_client heard through Omnilingual ASR + Muse (the live setup), both mocked."""
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    state = voice_client.state
+    state["transcript"] = "ስንት ብር አለኝ"
+
+    async def transcribe(client, raw, mime, lang, settings):
+        state["asr_lang"] = lang
+        return state["transcript"]
+
+    async def from_text(client, transcript, settings):
+        return state["heard"]
+
+    monkeypatch.setattr(asr, "transcribe", transcribe)
+    monkeypatch.setattr(understand, "from_text", from_text)
+    return voice_client
+
+
+def test_intent_asr_short_amharic_heard_as_english_stays_amharic(asr_client):
+    # The phone report: lang=am, ASR heard 9 characters, Muse said "en", the app got English.
+    asr_client.state["heard"] = heard("count", lang="en")
+    body = post_intent(asr_client, lang="am").json()
+    assert asr_client.state["asr_lang"] == "am"
+    assert body["intent"] == "count" and body["lang"] == "am"
+    assert body["speech"]["am"] == localize.render(say.COUNT_PROMPT, "am")[0]
+    assert body["speech_audio"].startswith("/speak/")
+
+
+def test_intent_asr_silence_is_asked_again_in_amharic(asr_client):
+    asr_client.state["transcript"] = ""
+    body = post_intent(asr_client, lang="am").json()
+    assert (body["intent"], body["next"], body["lang"]) == ("unknown", "ask", "am")
+    assert body["speech"]["am"] == localize.render(say.NOT_HEARD, "am")[0]
+    assert body["speech_audio"].startswith("/speak/")
+
+
+def test_intent_failure_speaks_the_chosen_language(asr_client, monkeypatch):
+    async def broken(client, raw, mime, lang, settings):
+        raise asr.AsrError("down")
+
+    monkeypatch.setattr(asr, "transcribe", broken)
+    r = post_intent(asr_client, lang="am")
+    assert r.status_code == 502
+    assert r.json()["speech"]["am"] == localize.render(say.NOT_HEARD, "am")[0]
+
+
+@pytest.mark.parametrize(
     "kwargs",
     [
         {"audio": b"", "filename": "q.m4a"},
@@ -395,6 +481,7 @@ def test_errors_use_templates(voice_client):
 def test_health_reports_voice(voice_client, monkeypatch):
     assert voice_client.get("/health").json()["voice"] == {
         "hears": "gemini", "intent": True, "translates": True, "tts": "mms", "speaks": ["am"],
+        "assist": True,
     }  # fmt: skip
     monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
     assert voice_client.get("/health").json()["voice"]["hears"] == "omnilingual"
@@ -403,6 +490,7 @@ def test_health_reports_voice(voice_client, monkeypatch):
 def test_health_without_any_voice_engine(client):
     assert client.get("/health").json()["voice"] == {
         "hears": "off", "intent": False, "translates": True, "tts": "off", "speaks": [],
+        "assist": False,
     }  # fmt: skip
 
 
@@ -439,6 +527,62 @@ def test_asr_request_shape(voice_env, monkeypatch):
     assert text == "ሰላም"
     assert seen["url"] == "http://127.0.0.1:8002/transcribe?lang=amh_Ethi"
     assert seen["type"] == "audio/m4a" and seen["body"] == SHORT_M4A
+
+
+def test_asr_timeout_grows_with_the_clip(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_TIMEOUT_S", "10")
+    s = Settings()
+    assert asr.timeout_for(0, s) == 10
+    assert asr.timeout_for(88_000, s) == pytest.approx(15.5)  # ~5.5 s of app audio
+    assert asr.timeout_for(10_000_000, s) == 10 + asr.MAX_EXTRA_S  # capped under the app's 30 s
+
+
+def test_asr_timeout_is_sent(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    monkeypatch.setenv("ASR_TIMEOUT_S", "10")
+    seen = {}
+
+    def handler(request):
+        seen["timeout"] = request.extensions["timeout"]["read"]
+        return httpx.Response(200, json={"text": "hi"})
+
+    with_mock(handler, lambda c: asr.transcribe(c, b"x" * 32_000, "audio/m4a", "en", Settings()))
+    assert seen["timeout"] == pytest.approx(12.0)
+
+
+def test_asr_keep_warm_sends_silence_and_survives_errors(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    monkeypatch.setenv("ASR_KEEPALIVE_S", "0.01")
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise httpx.ConnectError("down")  # a failed ping must not end the loop
+        return httpx.Response(200, json={"text": ""})
+
+    async def go(client):
+        task = asyncio.create_task(asr.keep_warm(client, Settings()))
+        while len(calls) < 3:
+            await asyncio.sleep(0.01)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    with_mock(handler, go)
+    assert str(calls[1].url) == "http://127.0.0.1:8002/transcribe?lang=eng_Latn"
+    assert calls[1].headers["content-type"] == "audio/wav"
+    with wave.open(io.BytesIO(calls[1].content)) as w:
+        assert w.getframerate() == 16_000 and w.getnframes() == 8_000
+
+
+def test_asr_keep_warm_off(voice_env, monkeypatch):
+    monkeypatch.setenv("ASR_URL", "http://127.0.0.1:8002")
+    monkeypatch.setenv("ASR_KEEPALIVE_S", "0")
+
+    def handler(request):
+        raise AssertionError("no ping when ASR_KEEPALIVE_S=0")
+
+    assert with_mock(handler, lambda c: asr.keep_warm(c, Settings())) is None
 
 
 @pytest.mark.parametrize(

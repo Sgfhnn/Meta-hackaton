@@ -20,7 +20,7 @@ The user holds the screen (or taps Ask) and speaks. **Meta Omnilingual ASR** (`o
 | Field | Type | Notes |
 |---|---|---|
 | `audio` | file | m4a (AAC), wav, webm, mp3, ogg or flac, about 10 s at most (`MAX_AUDIO_BYTES`, default 3 MB) |
-| `lang` | string | optional: the app's current language (`am`, `om` or `en`), passed to the recogniser and used when the language can't be told |
+| `lang` | string | the app's current language (`am`, `om` or `en`), the one the user chose. It is passed to the recogniser, and the answer is always in it. Only a request without `lang` is answered in the language heard |
 
 **Response 200**
 ```json
@@ -28,6 +28,7 @@ The user holds the screen (or taps Ask) and speaks. **Meta Omnilingual ASR** (`o
   "intent": "change",
   "next": "scan",
   "lang": "am",
+  "heard_lang": "am",
   "paid": 500,
   "price": 320,
   "speech": {"en": "You paid 500 birr for 320 birr. Your change should be 180 birr. Spread it out, hold the phone over it and tap the screen.", "am": "..."},
@@ -37,7 +38,8 @@ The user holds the screen (or taps Ask) and speaks. **Meta Omnilingual ASR** (`o
 ```
 - `intent`: `count`, `change`, or `unknown` when the question was not understood.
 - `next`: what the app does now. `scan` means the next tap scans with this intent (and `paid`/`price` for a change check). `ask` means speak `speech` and let the user ask again: the question was not understood, an amount is missing, or the price is more than what was paid. `done` means nothing to scan: they paid exactly the price.
-- `lang`: the language the user spoke (`am`, `om` or `en`). The app answers in it.
+- `lang`: the language of the answer (`am`, `om` or `en`): the `lang` the app sent. A guess at the language of the question never switches it, because a few words of Amharic are often heard as English. There is no "change language" intent; the user changes language in the app.
+- `heard_lang`: the language the recogniser or model thought the question was in, or `null`. For diagnosis only; the app ignores it.
 - `paid` and `price`: whole birr, only for `change`; `null` when not said. The model is told never to guess an amount, code checks them, and the answer reads them back to the user before any scan.
 - When the recogniser hears nothing, the answer is `intent: "unknown"`, `next: "ask"` with "Sorry, I couldn't hear that".
 - `speech`, `speech_audio`, `speech_todo`: see §1.1.
@@ -183,3 +185,73 @@ Each `/scan` and `/intent` call writes one JSON trace, keyed by `trace_id`. It r
  "voice": {"hears": "omnilingual", "intent": true, "translates": true, "tts": "mms", "speaks": ["am"]}}
 ```
 `refs`: read B's reference sheets are loaded (without them no scan speaks a total). `sam`: the SAM provider (`roboflow`, `modal` or `off`). `voice.hears`: what hears voice questions (`omnilingual`, `gemini` or `off`); `voice.intent`: `POST /intent` works. `voice.translates`: answers come in Amharic and Oromo (templates, always on). `voice.tts`: `mms` or `off`. `voice.speaks`: the languages answered with clips.
+
+## 7. `POST /assist`: the voice assistant
+
+The app is a conversation: the user taps anywhere (or holds) and speaks, and the assistant answers by voice and acts. This replaces the separate Ask button; `POST /intent` stays for older builds.
+
+**Who does what:** **Meta Omnilingual ASR** writes down what was said (§1.2). **Muse Spark Open** reads it with the last few turns and the app's state, and calls one tool, `respond`, with a strict schema: `action`, `lang`, `paid`, `price`, `needs`, `reply_en`, `reply_am`. **Code** then decides what is said: every action speaks a fixed sentence (Amharic from templates, numbers written by code, voiced by **Meta MMS-TTS**). Only `none` (a question such as "how should I keep my notes?" or "how much did I have?") speaks the model's own reply, and only when it is at most two sentences, in the right script, and every number in it is one the user said, one in the app's state, or a birr denomination; otherwise the fixed "I can count your money or check your change" is said. If Muse fails or takes longer than `ASSIST_TIMEOUT_S` (15 s), a keyword matcher handles count, change, switch language, repeat and help. Gemini is used only when `ASR_URL` is not set or the recogniser fails and `GEMINI_API_KEY` is set.
+
+**Request:** `multipart/form-data`
+| Field | Type | Notes |
+|---|---|---|
+| `audio` | file | as for `/intent` (m4a, webm, wav, ogg …), about 10 s at most. Or: |
+| `text` | string | a typed turn instead of audio (tests, the web preview), at most 500 characters |
+| `lang` | string | `en` or `am`: the language the user chose. The answer is always in it, unless the action is `set_lang` |
+| `session_id` | string | optional, picked by the app (a random id per launch). The last 6 turns of a session stay in memory for 30 minutes so the user can answer a question ("and the price was 320") |
+| `state` | JSON string | optional: `{"last_total": 350, "last_notes": [200, 100, 50], "pending_paid": 500, "pending_price": null, "camera_open": false}`. What the app last told the user, so "how much did I have?" and a two-part change question work. `camera_open: true` while live guidance runs: then "take it" / "now" means `capture` and "stop" / "cancel" closes the camera. `audio_log`: optional list of the app's last clip outcomes (e.g. `"clip started 240 ms"`, `"clip error: ..."`); the last 8 (160 chars each) go into the trace only, to diagnose phones that play no clips |
+
+**Response 200**
+```json
+{
+  "action": "change",
+  "intent": "change",
+  "lang": "am",
+  "paid": 500, "price": 320,
+  "needs": null,
+  "heard": true,
+  "decided_by": "muse",
+  "speech": {"en": "You paid 500 birr for 320 birr. Your change should be 180 birr. …", "am": "…"},
+  "speech_audio": "/speak/…",
+  "trace_id": "…",
+  "timing_ms": {"asr": 610, "muse": 760, "tts": 0, "total": 1380}
+}
+```
+| `action` | What the app does |
+|---|---|
+| `scan` | `intent: "count"`. Speak, then open the camera with live guidance (§8) and scan |
+| `change` | `intent: "change"` with `paid` and `price` (read back in `speech`). Speak, then scan as a change check |
+| `set_lang` | Switch the app to `lang`, remember it, and speak the confirmation (already in the new language) |
+| `repeat` | Say the last answer again (the app keeps it; `speech` is only "Here it is again.") |
+| `help` | Speak what the app can do |
+| `stop` | Stop speaking. With the camera open: close it ("Okay, I closed the camera.") and keep listening; otherwise stop listening hands-free until the next tap |
+| `capture` | Only when the app sent `camera_open: true`: take the photo now and scan it. Without the camera open, a capture request is answered as `scan` |
+| `none` | Speak `speech`. With `needs: "ask"`, listen again right after (an amount is missing, or nothing was heard) |
+
+`decided_by`: `muse`, `code` (a short camera command such as "take it", "now", "stop", "አንሳ", "አቁም" said while `camera_open`, matched on the whole utterance with no model call), `keywords` (Muse failed), `gemini` (Gemini heard the audio) or `none` (nothing was heard). `heard: false` means the recogniser heard nothing ("Sorry, I couldn't hear that"). Errors are as in §3: `400` (no audio and no text, bad audio), `501` (no recogniser configured), `502` (the recogniser failed and there is no fallback). The trace records the action, who decided it, amounts and timings, never the words.
+
+Measured on the box (Oct 31, 12 real clips, Amharic and English): ASR + Muse p50 1.4 s, p90 1.8 s. A free Amharic reply adds 0.7–2.5 s of MMS synthesis.
+
+## 8. `POST /frame`: live camera guidance
+
+While the camera is open the app sends a small frame (about 640 px, JPEG quality 30) about once a second. The answer comes from image statistics in code (Pillow only, no model, no network, about 10 ms), so it costs nothing and never waits on Muse.
+
+**Request:** `multipart/form-data` with `image` (JPEG or PNG, at most 1 MB) and `lang` (`en` or `am`).
+
+**Response 200**
+```json
+{"status": "cut_off", "side": "right", "ready": false,
+ "speech": {"en": "Some notes are cut off on the right. Move the phone a little to the right.", "am": "…"},
+ "speech_audio": "/speak/…", "ms": 9}
+```
+| `status` | Meaning |
+|---|---|
+| `ok` | Good enough to count (`ready: true`). After two `ok` frames in a row the app takes the full photo and calls `/scan` |
+| `dark` | Too dark to read |
+| `bright` | Glare or washed out |
+| `blurry` | Out of focus or moving |
+| `no_notes` | Nothing but a plain surface |
+| `far` | The notes fill a small part of the frame |
+| `cut_off` | Notes run off one edge (`side`: `left`, `right`, `top` = away from the user, `bottom` = toward the user) |
+
+These are hints, not judgements: Muse still decides on the full photo, and the rules lean towards `ok`, because a hint that never goes away is worse than one photo too many. On the team's private photos every real photo is `ok` (48 of 48: dev, locked, overlap and Anu's sets); the hint classes were checked on darkened, brightened, blurred, shrunk and cropped copies (confusion table in the PR). `400 bad_request` for a file that is not an image.

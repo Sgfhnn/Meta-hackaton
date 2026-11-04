@@ -84,3 +84,13 @@ def test_templates_cover_the_same_keys():
     assert set(am["fixed"]) == set(om["fixed"]) == set(localize.FIXED_NAMES)
     assert set(am["app"]) == set(om["app"]) == set(say.APP_PHRASES)
     assert set(am["positions"]) == set(om["positions"]) == set(localize.POSITIONS)
+
+
+def test_permission_phrases():
+    # First launch: said before the permission dialogs, and after both were allowed.
+    assert "Swipe right to Allow" in say.APP_PHRASES["permissionsIntro"]
+    assert say.APP_PHRASES["permissionsDone"] == "Thank you. All set."
+    for lang in ("am", "om"):
+        for key in ("permissionsIntro", "permissionsDone"):
+            shown, spoken = localize.render(say.APP_PHRASES[key], lang)
+            assert shown == TEMPLATES[lang]["app"][key] and spoken
