@@ -34,7 +34,7 @@ from birr.config import get_settings  # noqa: E402
 from birr.jobs import JobStore  # noqa: E402
 from birr.voice.service import Voice  # noqa: E402
 
-PER_HOUR = int(os.getenv("DEMO_SCANS_PER_HOUR", "15"))
+PER_HOUR = int(os.getenv("DEMO_SCANS_PER_HOUR", "60"))
 PER_DAY_ALL = int(os.getenv("DEMO_SCANS_PER_DAY", "400"))
 _hits: dict[str, deque] = defaultdict(deque)
 _day: list = [time.strftime("%Y-%m-%d"), 0]
