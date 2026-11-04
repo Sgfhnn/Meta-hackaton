@@ -40,42 +40,42 @@
 <body>
 <main>
   <h1><span>Birr</span> ብር</h1>
-  <p class="lede" id="lede">One photo of your cash, and Birr says the total out loud. Built for blind and low-vision people in Ethiopia. Muse Spark reads every note twice, and Birr only speaks a total when both reads agree. Otherwise it asks for a rescan, so it doesn't guess.</p>
+  <p class="lede" id="lede" data-t="lede">One photo of your cash, and Birr says the total out loud. Built for blind and low-vision people in Ethiopia. Muse Spark reads every note twice, and Birr only speaks a total when both reads agree. Otherwise it asks for a rescan, so it doesn't guess.</p>
 
   <div class="card">
-    <label id="langLabel">Answer language</label>
+    <label id="langLabel" data-t="lang">Answer language</label>
     <div class="row" role="group" aria-labelledby="langLabel">
       <button type="button" data-lang="en" aria-pressed="true">English</button>
       <button type="button" data-lang="am" aria-pressed="false">አማርኛ</button>
     </div>
     <div style="height:14px"></div>
-    <label id="modeLabel">What do you want to know?</label>
+    <label id="modeLabel" data-t="mode">What do you want to know?</label>
     <div class="row" role="group" aria-labelledby="modeLabel">
-      <button type="button" data-mode="count" aria-pressed="true">How much is this?</button>
-      <button type="button" data-mode="change" aria-pressed="false">Is my change right?</button>
+      <button type="button" data-mode="count" aria-pressed="true" data-t="count">How much is this?</button>
+      <button type="button" data-mode="change" aria-pressed="false" data-t="change">Is my change right?</button>
     </div>
     <div id="changeFields" class="row" style="display:none;margin-top:12px">
-      <div style="flex:1;min-width:140px"><label for="paid">I paid (birr)</label><input id="paid" type="number" inputmode="numeric" value="500"></div>
-      <div style="flex:1;min-width:140px"><label for="price">It cost (birr)</label><input id="price" type="number" inputmode="numeric" value="320"></div>
+      <div style="flex:1;min-width:140px"><label for="paid" data-t="paid">I paid (birr)</label><input id="paid" type="number" inputmode="numeric" value="500"></div>
+      <div style="flex:1;min-width:140px"><label for="price" data-t="price">It cost (birr)</label><input id="price" type="number" inputmode="numeric" value="320"></div>
     </div>
   </div>
 
   <div class="card">
-    <label for="file" class="btn big" style="display:block;text-align:center" id="shootLabel">Take or choose a photo of the notes</label>
+    <label for="file" class="btn big" style="display:block;text-align:center" id="shootLabel" data-t="shoot">Take or choose a photo of the notes</label>
     <input id="file" class="sr" type="file" accept="image/*" capture="environment">
     <div id="samplesWrap" style="display:none">
-      <p style="color:var(--mute);margin:16px 0 8px">No birr with you? Tap a sample pile:</p>
+      <p style="color:var(--mute);margin:16px 0 8px" data-t="samples">No birr with you? Tap a sample pile:</p>
       <div class="samples" id="samples"></div>
     </div>
     <img id="preview" alt="The photo being counted">
   </div>
 
   <div class="card" aria-live="polite">
-    <div id="status">Ready.</div>
+    <div id="status" data-t="ready">Ready.</div>
     <div id="answer"></div>
     <div id="notes"></div>
-    <div class="row" style="margin-top:12px"><button type="button" id="replay" style="display:none">Say it again</button></div>
-    <details style="margin-top:12px"><summary>What the backend sent (for the curious)</summary><pre id="raw"></pre></details>
+    <div class="row" style="margin-top:12px"><button type="button" id="replay" style="display:none" data-t="replay">Say it again</button></div>
+    <details style="margin-top:12px"><summary data-t="raw">What the backend sent (for the curious)</summary><pre id="raw"></pre></details>
   </div>
 
   <footer>
@@ -87,11 +87,32 @@
 <script>
 const state = { lang: "en", mode: "count", lastSpeech: "" };
 const $ = (id) => document.getElementById(id);
+const T = {
+  am: {
+    lede: "የገንዘብዎን አንድ ፎቶ ያንሱ፤ ብር ጠቅላላ ድምሩን ጮክ ብሎ ይነግርዎታል። ለኢትዮጵያ ዓይነ ስውራንና የማየት ችግር ላለባቸው የተሰራ ነው። Muse Spark እያንዳንዱን ኖት ሁለት ጊዜ ያነባል፤ ሁለቱ ንባቦች ሲስማሙ ብቻ ድምሩን ይናገራል። ካልተስማሙ ደግሞ እንደገና እንዲያነሱ ይጠይቃል እንጂ አይገምትም።",
+    lang: "የመልስ ቋንቋ", mode: "ምን ማወቅ ይፈልጋሉ?", count: "ስንት ብር ነው?", change: "መልሱ ትክክል ነው?",
+    paid: "የከፈልኩት (ብር)", price: "ዋጋው (ብር)", shoot: "የኖቶቹን ፎቶ ያንሱ ወይም ይምረጡ",
+    samples: "ብር ከሌለዎት ናሙና ይንኩ፦", replay: "እንደገና ተናገር", raw: "ከሰርቨሩ የመጣው መልስ", ready: "ዝግጁ ነው።",
+    done: (s) => `በ${s} ሰከንድ ተጠናቀቀ።`, fail: "ከቆጣሪው ጋር መገናኘት አልተቻለም። እባክዎ እንደገና ይሞክሩ።", birr: "ብር",
+  },
+  en: { done: (s) => `Done in ${s} s.`, fail: "Couldn't reach the counter. Please try again.", birr: "birr" },
+};
+const EN = {};
+document.querySelectorAll("[data-t]").forEach(el => EN[el.dataset.t] = el.textContent);
+function applyLang() {
+  document.documentElement.lang = state.lang;
+  document.querySelectorAll("[data-t]").forEach(el => {
+    const k = el.dataset.t;
+    if (k === "ready" && el.textContent !== EN.ready && el.textContent !== T.am.ready) return;
+    el.textContent = state.lang === "am" ? (T.am[k] || EN[k]) : EN[k];
+  });
+  document.querySelectorAll("#samples span").forEach(sp => sp.textContent = sp.dataset.label.replace("birr", T[state.lang].birr));
+}
 
 function press(groupAttr, value) {
   document.querySelectorAll(`[data-${groupAttr}]`).forEach(b => b.setAttribute("aria-pressed", String(b.dataset[groupAttr] === value)));
 }
-document.querySelectorAll("[data-lang]").forEach(b => b.onclick = () => { state.lang = b.dataset.lang; press("lang", state.lang); });
+document.querySelectorAll("[data-lang]").forEach(b => b.onclick = () => { state.lang = b.dataset.lang; press("lang", state.lang); applyLang(); });
 document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => {
   state.mode = b.dataset.mode; press("mode", state.mode);
   $("changeFields").style.display = state.mode === "change" ? "flex" : "none";
@@ -144,11 +165,11 @@ async function count(blob) {
       const read = body.notes.map(n => n.denomination).filter(Boolean);
       $("notes").textContent = (state.lang === "am" ? "የተነበቡ ኖቶች: " : "Notes read: ") + read.join(" + ");
     }
-    $("status").textContent = body.timing_ms ? `Done in ${(body.timing_ms.total / 1000).toFixed(1)} s.` : "Done.";
+    $("status").textContent = T[state.lang].done(body.timing_ms ? (body.timing_ms.total / 1000).toFixed(1) : "?");
     $("replay").style.display = "inline-block";
     speak(speech, state.lang);
   } catch (e) {
-    $("status").textContent = "Couldn't reach the counter. Please try again.";
+    $("status").textContent = T[state.lang].fail;
   } finally { clearInterval(tick); }
 }
 
@@ -161,7 +182,7 @@ fetch("/samples/samples.json").then(r => r.ok ? r.json() : []).then(list => {
     const b = document.createElement("button");
     b.type = "button";
     b.setAttribute("aria-label", `Sample pile ${s.label}`);
-    b.innerHTML = `<img src="/samples/${s.file}" alt=""><span>${s.label}</span>`;
+    b.innerHTML = `<img src="/samples/${s.file}" alt=""><span data-label="${s.label}">${s.label.replace("birr", T[state.lang].birr)}</span>`;
     b.onclick = async () => count(await (await fetch(`/samples/${s.file}`)).blob());
     $("samples").appendChild(b);
   }
