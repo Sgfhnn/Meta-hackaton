@@ -8,6 +8,6 @@ when both reads agree. Answers in English or Amharic (fixed templates, so no mod
 amount), spoken with the browser's voice. The phone app adds Meta Omnilingual ASR (spoken
 questions) and Meta MMS-TTS (Amharic voice), which are too large for a serverless function.
 
-A per-visitor limit (15 scans an hour) and a daily cap protect the Muse budget.
+A per-visitor limit (60 scans an hour) and a daily cap protect the Muse budget.
 
 Deploy: `web/deploy.sh` (see the header). `BASETEN_API_KEY` lives in the Vercel project settings.

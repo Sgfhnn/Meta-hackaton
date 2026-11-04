@@ -1,3 +1,5 @@
+> **Superseded.** This was the fallback design ("Auditor") from day 1, kept for the record. Birr, the project we built, is described in the main README.
+
 # Birr cash assistant: architecture
 
 Status: **gated spike.** If the Wed Oct 28, 12:00 EAT gate fails, we switch to the AI Application Auditor (see §7).
