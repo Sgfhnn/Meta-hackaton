@@ -48,6 +48,7 @@ def _ready() -> None:
         state.jobs = JobStore()
         state.voice = Voice(settings)
         from birr.voice import assist
+
         state.sessions = assist.Sessions()
 
 
@@ -84,8 +85,10 @@ async def app(scope, receive, send):
         headers = dict(scope.get("headers") or [])
         ip = headers.get(b"x-forwarded-for", b"").decode().split(",")[0].strip() or "?"
         if _limited(ip):
-            body = {"error": "rate_limited",
-                    "speech": {"en": "The demo is busy. Please try again in a while."}}
+            body = {
+                "error": "rate_limited",
+                "speech": {"en": "The demo is busy. Please try again in a while."},
+            }
             await JSONResponse(body, status_code=429)(scope, receive, send)
             return
     scope = dict(scope, path=path, raw_path=path.encode())
